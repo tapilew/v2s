@@ -1,15 +1,6 @@
 import "./global.css";
 
 import {
-	completion,
-	LLAMA_3_2_1B_INST_Q4_0,
-	loadModel,
-	type ModelProgressUpdate,
-	transcribe,
-	unloadModel,
-	WHISPER_SPANISH_TINY_Q8_0,
-} from "@qvac/sdk";
-import {
 	AudioQuality,
 	IOSOutputFormat,
 	type RecordingOptions,
@@ -31,6 +22,18 @@ import {
 	Text,
 	View,
 } from "react-native";
+
+type ModelProgressUpdate = { percentage: number };
+type QvacSdk = typeof import("@qvac/sdk");
+
+const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
+let qvacSdk: QvacSdk | null = null;
+
+const getQvacSdk = async (): Promise<QvacSdk> => {
+	if (qvacSdk) return qvacSdk;
+	qvacSdk = await import("@qvac/sdk");
+	return qvacSdk;
+};
 
 type MessageRole = "user" | "assistant";
 
@@ -129,7 +132,8 @@ export default function App() {
 	const pulse = useRef(new Animated.Value(1)).current;
 
 	const isBusy = phase.kind === "transcribing" || phase.kind === "thinking";
-	const canRecord = phase.kind === "ready" || phase.kind === "recording";
+	const canRecord =
+		!uiOnly && (phase.kind === "ready" || phase.kind === "recording");
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally reruns model initialization after recovery.
 	useEffect(() => {
@@ -147,10 +151,16 @@ export default function App() {
 			};
 
 		const initializeModels = async () => {
+			if (uiOnly) {
+				setPhase({ kind: "ready" });
+				return;
+			}
+
 			setPhase({ kind: "loading", model: "asr", progress: 0 });
 			try {
-				const asr = await loadModel({
-					modelSrc: WHISPER_SPANISH_TINY_Q8_0,
+				const sdk = await getQvacSdk();
+				const asr = await sdk.loadModel({
+					modelSrc: sdk.WHISPER_SPANISH_TINY_Q8_0,
 					modelType: "whisper",
 					modelConfig: {
 						audio_format: "f32le",
@@ -164,14 +174,14 @@ export default function App() {
 				});
 
 				if (cancelled) {
-					await unloadModel({ modelId: asr });
+					await sdk.unloadModel({ modelId: asr });
 					return;
 				}
 				loadedModels.current.asr = asr;
 
 				setPhase({ kind: "loading", model: "llm", progress: 0 });
-				const llm = await loadModel({
-					modelSrc: LLAMA_3_2_1B_INST_Q4_0,
+				const llm = await sdk.loadModel({
+					modelSrc: sdk.LLAMA_3_2_1B_INST_Q4_0,
 					modelType: "llm",
 					modelConfig: {
 						device: "gpu",
@@ -181,7 +191,7 @@ export default function App() {
 				});
 
 				if (cancelled) {
-					await unloadModel({ modelId: llm });
+					await sdk.unloadModel({ modelId: llm });
 					return;
 				}
 				loadedModels.current.llm = llm;
@@ -197,12 +207,16 @@ export default function App() {
 
 		return () => {
 			cancelled = true;
+			if (!qvacSdk) return;
+			const sdk = qvacSdk;
 			const models = loadedModels.current;
 			loadedModels.current = { asr: null, llm: null };
 			void Promise.all(
 				[models.asr, models.llm]
 					.filter((modelId): modelId is string => modelId !== null)
-					.map((modelId) => unloadModel({ modelId }).catch(() => undefined)),
+					.map((modelId) =>
+						sdk.unloadModel({ modelId }).catch(() => undefined),
+					),
 			);
 		};
 	}, [modelAttempt]);
@@ -297,7 +311,8 @@ export default function App() {
 		setPhase({ kind: "thinking" });
 
 		try {
-			const run = completion({
+			const sdk = await getQvacSdk();
+			const run = sdk.completion({
 				modelId: llmModelId,
 				history: historyRef.current,
 				stream: true,
@@ -332,8 +347,9 @@ export default function App() {
 			if (!uri || !asrModelId)
 				throw new Error("No se encontró el audio grabado.");
 
+			const sdk = await getQvacSdk();
 			const transcript = (
-				await transcribe({
+				await sdk.transcribe({
 					modelId: asrModelId,
 					audioChunk: toLocalPath(uri),
 				})
