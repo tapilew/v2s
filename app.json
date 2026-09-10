@@ -5,7 +5,7 @@
 		"version": "1.0.0",
 		"orientation": "portrait",
 		"icon": "./assets/icon.png",
-		"userInterfaceStyle": "light",
+		"userInterfaceStyle": "dark",
 		"ios": {
 			"supportsTablet": true
 		},
@@ -39,7 +39,8 @@
 				}
 			],
 			"@qvac/sdk/expo-plugin",
-			"expo-audio"
+			"expo-audio",
+			"expo-sharing"
 		]
 	}
 }
