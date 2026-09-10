@@ -51,14 +51,48 @@ type SpreadsheetData = {
 	fallback: boolean;
 };
 
+const MODE_ORDER = ["finance", "health"] as const;
+type ModeId = (typeof MODE_ORDER)[number];
+
+type ModeAccent = {
+	fg: { color: string };
+	bg: { backgroundColor: string };
+	glow: { backgroundColor: string; shadowColor: string };
+	ink: { color: string };
+};
+
+type ModeConfig = {
+	tabLabel: string;
+	tabGlyph: string;
+	accent: string;
+	inkColor: string;
+	tint: ModeAccent;
+	eyebrow: string;
+	captureTitle: string;
+	emptyTitle: string;
+	emptyCopy: string;
+	readyEmpty: string;
+	readySome: string;
+	footerHintEmpty: string;
+	footerHintSome: string;
+	fallbackTitle: string;
+	prompt: string;
+	demoTurns: readonly string[];
+	demoSheet: (turns: CapturedTurn[]) => SpreadsheetData;
+};
+
+type Session = { turns: CapturedTurn[]; spreadsheet: SpreadsheetData | null };
+
 type AssistantPhase =
 	| { kind: "booting" }
 	| { kind: "loading"; model: ModelName; progress: number }
 	| { kind: "ready" }
 	| { kind: "recording" }
-	| { kind: "transcribing" }
-	| { kind: "converting" }
+	| { kind: "transcribing"; owner: ModeId }
+	| { kind: "converting"; owner: ModeId }
 	| { kind: "error"; message: string; scope: "models" | "capture" };
+
+const EMPTY_SESSION: Session = { turns: [], spreadsheet: null };
 
 const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
 let qvacSdk: QvacSdk | null = null;
@@ -68,13 +102,100 @@ const getQvacSdk = async (): Promise<QvacSdk> => {
 	return qvacSdk;
 };
 
-const EXTRACTION_PROMPT =
-	"Eres una asistente que convierte conversaciones en datos de hoja de cálculo. " +
-	"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
-	'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
-	"Elige columnas útiles según la conversación, por ejemplo Tarea, Responsable, Fecha, Estado y Notas. " +
-	'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
-	"Si no hay tareas, organiza hechos, decisiones o pendientes en filas claras.";
+const MODES: Record<ModeId, ModeConfig> = {
+	finance: {
+		tabLabel: "Finanzas",
+		tabGlyph: "$",
+		accent: "#B8F56F",
+		inkColor: "#122014",
+		tint: {
+			fg: { color: "#B8F56F" },
+			bg: { backgroundColor: "#B8F56F" },
+			glow: { backgroundColor: "#B8F56F", shadowColor: "#B8F56F" },
+			ink: { color: "#122014" },
+		},
+		eyebrow: "V2S / MODO FINANZAS",
+		captureTitle: "Movimientos",
+		emptyTitle: "Tu hoja de gastos empieza aquí",
+		emptyCopy:
+			"Di en voz alta lo que gastaste o cobraste. Cada fragmento se convierte en una fila con concepto, monto y fecha.",
+		readyEmpty: "Listo para escuchar tus movimientos",
+		readySome: "Sigue agregando o crea tu hoja",
+		footerHintEmpty: "Toca el micrófono y di un gasto",
+		footerHintSome: "Añade otro movimiento o crea la hoja",
+		fallbackTitle: "Movimientos sin clasificar",
+		prompt:
+			"Eres una asistente que convierte conversaciones sobre dinero en datos de hoja de cálculo. " +
+			"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
+			'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
+			'Usa exactamente estas columnas, en este orden: ["Concepto", "Monto", "Categoría", "Fecha", "Método"]. ' +
+			"Escribe el monto tal como se dijo, con su moneda si aparece. " +
+			'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
+			"Si no hay movimientos de dinero, organiza los compromisos o pendientes económicos en filas claras.",
+		demoTurns: [
+			"Pagué dos mil pesos de la renta el primero de mayo con transferencia.",
+			"Cobré ochocientos de la clase particular del sábado, todavía en efectivo.",
+		],
+		demoSheet: (turns) => ({
+			title: "Movimientos de mayo",
+			columns: ["Concepto", "Monto", "Categoría", "Fecha", "Método"],
+			rows: turns.map((turn, index) => [
+				turn.content.split(" ").slice(0, 4).join(" "),
+				index % 2 === 0 ? "2000 pesos" : "800 pesos",
+				index % 2 === 0 ? "Vivienda" : "Ingreso",
+				index % 2 === 0 ? "1 de mayo" : "sábado",
+				index % 2 === 0 ? "Transferencia" : "Efectivo",
+			]),
+			fallback: false,
+		}),
+	},
+	health: {
+		tabLabel: "Salud",
+		tabGlyph: "+",
+		accent: "#7FE3D4",
+		inkColor: "#0A211D",
+		tint: {
+			fg: { color: "#7FE3D4" },
+			bg: { backgroundColor: "#7FE3D4" },
+			glow: { backgroundColor: "#7FE3D4", shadowColor: "#7FE3D4" },
+			ink: { color: "#0A211D" },
+		},
+		eyebrow: "V2S / MODO SALUD",
+		captureTitle: "Registro",
+		emptyTitle: "Tu registro de salud empieza aquí",
+		emptyCopy:
+			"Di en voz alta cómo te sientes, qué comiste o qué medicamento tomaste. Cada fragmento se convierte en una fila con fecha y notas.",
+		readyEmpty: "Listo para escuchar tu registro",
+		readySome: "Sigue agregando o crea tu hoja",
+		footerHintEmpty: "Toca el micrófono y cuenta cómo te sientes",
+		footerHintSome: "Añade otro registro o crea la hoja",
+		fallbackTitle: "Registros sin clasificar",
+		prompt:
+			"Eres una asistente que convierte conversaciones sobre salud en datos de hoja de cálculo. " +
+			"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
+			'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
+			'Usa exactamente estas columnas, en este orden: ["Registro", "Tipo", "Valor", "Fecha", "Notas"]. ' +
+			"En Tipo usa una de estas categorías: Síntoma, Comida, Medicamento, Ejercicio o Ánimo. " +
+			'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
+			"No des diagnósticos ni consejos médicos. Solo organiza lo que la persona dijo.",
+		demoTurns: [
+			"Me duele la cabeza desde la mañana, como un cuatro de diez.",
+			"Tomé el ibuprofeno de las dos y comí ensalada con pollo.",
+		],
+		demoSheet: (turns) => ({
+			title: "Registro de la semana",
+			columns: ["Registro", "Tipo", "Valor", "Fecha", "Notas"],
+			rows: turns.map((turn, index) => [
+				turn.content.split(" ").slice(0, 4).join(" "),
+				index % 2 === 0 ? "Síntoma" : "Medicamento",
+				index % 2 === 0 ? "4 de 10" : "1 dosis",
+				index % 2 === 0 ? "hoy por la mañana" : "hoy a las dos",
+				index % 2 === 0 ? "Sigue al mediodía" : "Con comida",
+			]),
+			fallback: false,
+		}),
+	},
+};
 
 const RECORDING_OPTIONS: RecordingOptions = {
 	directory: "cache",
@@ -141,8 +262,11 @@ const slugify = (value: string) =>
 		.toLowerCase()
 		.slice(0, 40) || "hoja";
 
-const fallbackSpreadsheet = (turns: CapturedTurn[]): SpreadsheetData => ({
-	title: "Conversación sin clasificar",
+const fallbackSpreadsheet = (
+	turns: CapturedTurn[],
+	title: string,
+): SpreadsheetData => ({
+	title,
 	columns: ["#", "Fragmento de conversación"],
 	rows: turns.map((turn, index) => [String(index + 1), turn.content]),
 	fallback: true,
@@ -151,8 +275,10 @@ const fallbackSpreadsheet = (turns: CapturedTurn[]): SpreadsheetData => ({
 const normalizeSpreadsheet = (
 	value: unknown,
 	turns: CapturedTurn[],
+	fallbackTitle: string,
 ): SpreadsheetData => {
-	if (!value || typeof value !== "object") return fallbackSpreadsheet(turns);
+	if (!value || typeof value !== "object")
+		return fallbackSpreadsheet(turns, fallbackTitle);
 	const candidate = value as {
 		title?: unknown;
 		columns?: unknown;
@@ -165,7 +291,7 @@ const normalizeSpreadsheet = (
 				.filter(Boolean)
 		: [];
 	if (!columns.length || !Array.isArray(candidate.rows))
-		return fallbackSpreadsheet(turns);
+		return fallbackSpreadsheet(turns, fallbackTitle);
 	const rows = candidate.rows
 		.map((row) => {
 			if (Array.isArray(row)) return row.map((cell) => String(cell ?? "—"));
@@ -177,7 +303,7 @@ const normalizeSpreadsheet = (
 		})
 		.filter((row): row is string[] => row !== null)
 		.map((row) => columns.map((_, index) => (row[index] ?? "—").trim() || "—"));
-	if (!rows.length) return fallbackSpreadsheet(turns);
+	if (!rows.length) return fallbackSpreadsheet(turns, fallbackTitle);
 	return {
 		title:
 			typeof candidate.title === "string" && candidate.title.trim()
@@ -189,13 +315,21 @@ const normalizeSpreadsheet = (
 	};
 };
 
-const parseSpreadsheet = (response: string, turns: CapturedTurn[]) => {
+const parseSpreadsheet = (
+	response: string,
+	turns: CapturedTurn[],
+	fallbackTitle: string,
+) => {
 	const jsonCandidate = response.match(/\{[\s\S]*\}/)?.[0];
-	if (!jsonCandidate) return fallbackSpreadsheet(turns);
+	if (!jsonCandidate) return fallbackSpreadsheet(turns, fallbackTitle);
 	try {
-		return normalizeSpreadsheet(JSON.parse(jsonCandidate), turns);
+		return normalizeSpreadsheet(
+			JSON.parse(jsonCandidate),
+			turns,
+			fallbackTitle,
+		);
 	} catch {
-		return fallbackSpreadsheet(turns);
+		return fallbackSpreadsheet(turns, fallbackTitle);
 	}
 };
 
@@ -274,13 +408,53 @@ function LevelMeter({ level }: { level: number }) {
 	);
 }
 
+function ModeTabs({
+	active,
+	locked,
+	onSelect,
+}: {
+	active: ModeId;
+	locked: boolean;
+	onSelect: (mode: ModeId) => void;
+}) {
+	return (
+		<View style={styles.tabBar}>
+			{MODE_ORDER.map((id) => {
+				const config = MODES[id];
+				const isActive = id === active;
+				return (
+					<PressableBox
+						accessibilityLabel={`Modo ${config.tabLabel}`}
+						accessibilityState={{ disabled: locked, selected: isActive }}
+						disabled={locked}
+						key={id}
+						onPress={() => onSelect(id)}
+						pressedStyle={styles.pressedSoft}
+						style={[styles.tab, locked && styles.tabLocked]}
+					>
+						<Text style={[styles.tabGlyph, isActive && config.tint.fg]}>
+							{config.tabGlyph}
+						</Text>
+						<Text style={[styles.tabLabel, isActive && config.tint.fg]}>
+							{config.tabLabel}
+						</Text>
+					</PressableBox>
+				);
+			})}
+		</View>
+	);
+}
+
 function Assistant() {
 	const recorder = useAudioRecorder(RECORDING_OPTIONS);
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [phase, setPhase] = useState<AssistantPhase>({ kind: "booting" });
-	const [turns, setTurns] = useState<CapturedTurn[]>([]);
-	const [spreadsheet, setSpreadsheet] = useState<SpreadsheetData | null>(null);
+	const [mode, setMode] = useState<ModeId>("finance");
+	const [sessions, setSessions] = useState<Record<ModeId, Session>>({
+		finance: EMPTY_SESSION,
+		health: EMPTY_SESSION,
+	});
 	const [recordingSeconds, setRecordingSeconds] = useState(0);
 	const [level, setLevel] = useState(0);
 	const [modelAttempt, setModelAttempt] = useState(0);
@@ -288,7 +462,19 @@ function Assistant() {
 	const loadedModels = useRef<ModelIds>({ asr: null, llm: null });
 	const scrollRef = useRef<ScrollView>(null);
 	const pulse = useRef(new Animated.Value(1)).current;
-	const demoTurn = useRef(0);
+	const demoTurn = useRef<Record<ModeId, number>>({ finance: 0, health: 0 });
+	const scrollAnchor = useRef({ count: 0, mode });
+	const updateSession = useCallback(
+		(target: ModeId, change: (session: Session) => Session) => {
+			setSessions((current) => ({
+				...current,
+				[target]: change(current[target]),
+			}));
+		},
+		[],
+	);
+	const config = MODES[mode];
+	const { turns, spreadsheet } = sessions[mode];
 	const isBusy = phase.kind === "transcribing" || phase.kind === "converting";
 	const isRecording = phase.kind === "recording";
 	const canRecord = phase.kind === "ready" || isRecording;
@@ -296,7 +482,7 @@ function Assistant() {
 		uiOnly ||
 		(loadedModels.current.asr !== null && loadedModels.current.llm !== null);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally retries initialization.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally retries initialization. Never add mode here: the cleanup unloads both models, so a mode dependency would re-download ~750 MB on every tab tap.
 	useEffect(() => {
 		let cancelled = false;
 		const progressFor =
@@ -438,9 +624,7 @@ function Assistant() {
 			case "loading":
 				return `Descargando ${MODEL_LABELS[phase.model]}`;
 			case "ready":
-				return turns.length
-					? "Sigue agregando o crea tu hoja"
-					: "Listo para escuchar";
+				return turns.length ? config.readySome : config.readyEmpty;
 			case "recording":
 				return "Te escucho";
 			case "transcribing":
@@ -452,7 +636,7 @@ function Assistant() {
 					? "No se pudieron cargar los modelos"
 					: "No se pudo guardar ese fragmento";
 		}
-	}, [phase, turns.length]);
+	}, [config, phase, turns.length]);
 
 	const statusCaption = useMemo(() => {
 		switch (phase.kind) {
@@ -467,27 +651,35 @@ function Assistant() {
 		}
 	}, [phase]);
 
-	const appendTurn = useCallback((content: string) => {
-		setTurns((current) => [...current, { id: makeId(), content }]);
-		setSpreadsheet(null);
-		setPhase({ kind: "ready" });
-	}, []);
+	const appendTurn = useCallback(
+		(target: ModeId, content: string) => {
+			updateSession(target, (session) => ({
+				turns: [...session.turns, { id: makeId(), content }],
+				spreadsheet: null,
+			}));
+			setPhase({ kind: "ready" });
+		},
+		[updateSession],
+	);
 
 	const removeTurn = (id: string) => {
-		setTurns((current) => current.filter((turn) => turn.id !== id));
-		setSpreadsheet(null);
+		updateSession(mode, (session) => ({
+			turns: session.turns.filter((turn) => turn.id !== id),
+			spreadsheet: null,
+		}));
 	};
 
 	const stopRecording = async () => {
-		setPhase({ kind: "transcribing" });
+		const owner = mode;
+		setPhase({ kind: "transcribing", owner });
 		try {
 			if (uiOnly) {
-				const demoTurns = [
-					"Revisar el presupuesto de marketing el viernes y confirmar los cambios con Ana.",
-					"Deja la campaña de mayo como pendiente y asigna el diseño a Marcos.",
-				];
-				appendTurn(demoTurns[demoTurn.current % demoTurns.length]);
-				demoTurn.current += 1;
+				const { demoTurns } = MODES[owner];
+				appendTurn(
+					owner,
+					demoTurns[demoTurn.current[owner] % demoTurns.length],
+				);
+				demoTurn.current[owner] += 1;
 				return;
 			}
 			await recorder.stop();
@@ -503,7 +695,7 @@ function Assistant() {
 				})
 			).trim();
 			if (isMeaningfulTranscript(transcript)) {
-				appendTurn(transcript);
+				appendTurn(owner, transcript);
 				return;
 			}
 			setPhase({
@@ -548,28 +740,21 @@ function Assistant() {
 
 	const generateSpreadsheet = async () => {
 		if (!turns.length) return;
+		const owner = mode;
 		const capturedTurns = turns;
-		setPhase({ kind: "converting" });
-		if (uiOnly) {
-			setSpreadsheet({
-				title: "Plan de acción del equipo de marketing",
-				columns: ["Tarea", "Responsable", "Fecha", "Estado", "Notas"],
-				rows: capturedTurns.map((turn, index) => [
-					turn.content.split(" ").slice(0, 4).join(" "),
-					index % 2 === 0 ? "Ana" : "Marcos",
-					index % 2 === 0 ? "viernes" : "—",
-					index % 2 === 0 ? "Pendiente" : "En pausa",
-					index % 2 === 0 ? "Confirmar con dirección" : "—",
-				]),
-				fallback: false,
-			});
+		const { demoSheet, fallbackTitle, prompt } = MODES[owner];
+		const writeSheet = (sheet: SpreadsheetData) => {
+			updateSession(owner, (session) => ({ ...session, spreadsheet: sheet }));
 			setPhase({ kind: "ready" });
+		};
+		setPhase({ kind: "converting", owner });
+		if (uiOnly) {
+			writeSheet(demoSheet(capturedTurns));
 			return;
 		}
 		const llmModelId = loadedModels.current.llm;
 		if (!llmModelId) {
-			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
-			setPhase({ kind: "ready" });
+			writeSheet(fallbackSpreadsheet(capturedTurns, fallbackTitle));
 			return;
 		}
 		try {
@@ -580,7 +765,7 @@ function Assistant() {
 			const run = sdk.completion({
 				modelId: llmModelId,
 				history: [
-					{ role: "system", content: EXTRACTION_PROMPT },
+					{ role: "system", content: prompt },
 					{ role: "user", content: transcript },
 				],
 				stream: true,
@@ -588,18 +773,20 @@ function Assistant() {
 			let response = "";
 			for await (const event of run.events)
 				if (event.type === "contentDelta") response += event.text;
-			setSpreadsheet(parseSpreadsheet(response, capturedTurns));
-			setPhase({ kind: "ready" });
+			writeSheet(parseSpreadsheet(response, capturedTurns, fallbackTitle));
 		} catch {
-			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
-			setPhase({ kind: "ready" });
+			writeSheet(fallbackSpreadsheet(capturedTurns, fallbackTitle));
 		}
 	};
 
 	const resetSession = () => {
-		setTurns([]);
-		setSpreadsheet(null);
+		updateSession(mode, () => EMPTY_SESSION);
 		setPhase({ kind: "ready" });
+	};
+
+	const selectMode = (next: ModeId) => {
+		setMode(next);
+		scrollRef.current?.scrollTo({ animated: false, y: 0 });
 	};
 
 	const retry = () => {
@@ -651,15 +838,26 @@ function Assistant() {
 	const tableScrolls = tableWidth > width - 42;
 
 	useEffect(() => {
-		if (!turns.length) return;
+		const previous = scrollAnchor.current;
+		scrollAnchor.current = { count: turns.length, mode };
+		if (previous.mode !== mode || turns.length <= previous.count) return;
 		const timeout = setTimeout(
 			() => scrollRef.current?.scrollToEnd({ animated: true }),
 			80,
 		);
 		return () => clearTimeout(timeout);
-	}, [turns.length]);
+	}, [mode, turns.length]);
 
 	const errored = phase.kind === "error";
+	const footerHint =
+		(phase.kind === "transcribing" || phase.kind === "converting") &&
+		phase.owner !== mode
+			? `Terminando en ${MODES[phase.owner].tabLabel}`
+			: isBusy
+				? statusText
+				: turns.length
+					? config.footerHintSome
+					: config.footerHintEmpty;
 
 	return (
 		<View style={styles.safeArea}>
@@ -674,12 +872,12 @@ function Assistant() {
 			>
 				<View style={styles.header}>
 					<View style={styles.brandLockup}>
-						<View style={styles.logoMark}>
-							<Text style={styles.logoWave}>∿</Text>
+						<View style={[styles.logoMark, config.tint.bg]}>
+							<Text style={[styles.logoWave, config.tint.ink]}>∿</Text>
 						</View>
 						<View style={styles.brandCopy}>
-							<Text numberOfLines={1} style={styles.eyebrow}>
-								V2S / VOICE TO SPREADSHEET
+							<Text numberOfLines={1} style={[styles.eyebrow, config.tint.fg]}>
+								{config.eyebrow}
 							</Text>
 							<Text numberOfLines={1} style={styles.title}>
 								Habla. Se ordena.
@@ -687,7 +885,7 @@ function Assistant() {
 						</View>
 					</View>
 					<View style={styles.localBadge}>
-						<View style={styles.localDot} />
+						<View style={[styles.localDot, config.tint.bg]} />
 						<Text style={styles.localText}>Local</Text>
 					</View>
 				</View>
@@ -698,10 +896,14 @@ function Assistant() {
 							style={[styles.statusIcon, errored && styles.statusIconError]}
 						>
 							{phase.kind === "loading" || isBusy ? (
-								<ActivityIndicator color="#B8F56F" size="small" />
+								<ActivityIndicator color={config.accent} size="small" />
 							) : (
 								<View
-									style={[styles.statusDot, errored && styles.statusDotError]}
+									style={[
+										styles.statusDot,
+										config.tint.bg,
+										errored && styles.statusDotError,
+									]}
 								/>
 							)}
 						</View>
@@ -721,10 +923,16 @@ function Assistant() {
 						<View style={styles.progressBlock}>
 							<View style={styles.progressTrack}>
 								<View
-									style={[styles.progressFill, { width: `${phase.progress}%` }]}
+									style={[
+										styles.progressFill,
+										config.tint.bg,
+										{ width: `${phase.progress}%` },
+									]}
 								/>
 							</View>
-							<Text style={styles.progressValue}>{phase.progress}%</Text>
+							<Text style={[styles.progressValue, config.tint.fg]}>
+								{phase.progress}%
+							</Text>
 						</View>
 					)}
 					{errored && (
@@ -749,26 +957,23 @@ function Assistant() {
 						</View>
 					}
 					label="CAPTURA"
-					title="Conversación"
+					title={config.captureTitle}
 				/>
 
 				{turns.length === 0 ? (
 					<View style={styles.emptyState}>
 						<View style={styles.emptyIcon}>
-							<Text style={styles.emptyGlyph}>◌</Text>
+							<Text style={[styles.emptyGlyph, config.tint.fg]}>◌</Text>
 						</View>
-						<Text style={styles.emptyTitle}>Tu hoja empieza aquí</Text>
-						<Text style={styles.emptyCopy}>
-							Graba una conversación por partes. Cada fragmento quedará listo
-							para organizarlo en filas.
-						</Text>
+						<Text style={styles.emptyTitle}>{config.emptyTitle}</Text>
+						<Text style={styles.emptyCopy}>{config.emptyCopy}</Text>
 					</View>
 				) : (
 					<View style={styles.turnList}>
 						{turns.map((turn, index) => (
 							<View key={turn.id} style={styles.turnCard}>
 								<View style={styles.turnNumber}>
-									<Text style={styles.turnNumberText}>
+									<Text style={[styles.turnNumberText, config.tint.fg]}>
 										{String(index + 1).padStart(2, "0")}
 									</Text>
 								</View>
@@ -792,7 +997,7 @@ function Assistant() {
 						<SectionHeading
 							badge={
 								<View style={styles.csvBadge}>
-									<Text style={styles.csvText}>
+									<Text style={[styles.csvText, config.tint.fg]}>
 										CSV · {rowLabel(spreadsheet.rows.length)}
 									</Text>
 								</View>
@@ -831,6 +1036,7 @@ function Assistant() {
 											style={[
 												styles.cell,
 												styles.headerCell,
+												config.tint.fg,
 												{ width: columnWidths[index] },
 											]}
 										>
@@ -871,17 +1077,27 @@ function Assistant() {
 						<PressableBox
 							onPress={() => void shareSpreadsheet()}
 							pressedStyle={styles.pressedStrong}
-							style={styles.shareButton}
+							style={[styles.shareButton, config.tint.bg]}
 						>
-							<Text style={styles.shareIcon}>↗</Text>
-							<Text style={styles.shareText}>Compartir como CSV</Text>
+							<Text style={[styles.shareIcon, config.tint.ink]}>↗</Text>
+							<Text style={[styles.shareText, config.tint.ink]}>
+								Compartir como CSV
+							</Text>
 						</PressableBox>
 						<PressableBox
+							disabled={isBusy}
 							onPress={resetSession}
 							pressedStyle={styles.pressedSoft}
 							style={styles.newSessionButton}
 						>
-							<Text style={styles.newSessionText}>Nueva conversación</Text>
+							<Text
+								style={[
+									styles.newSessionText,
+									isBusy && styles.newSessionTextDisabled,
+								]}
+							>
+								Nueva conversación
+							</Text>
 						</PressableBox>
 					</View>
 				)}
@@ -902,13 +1118,7 @@ function Assistant() {
 						</Text>
 					</View>
 				) : (
-					<Text style={styles.footerHint}>
-						{isBusy
-							? statusText
-							: turns.length
-								? "Añade otro fragmento o crea la hoja"
-								: "Toca el micrófono y habla"}
-					</Text>
+					<Text style={styles.footerHint}>{footerHint}</Text>
 				)}
 				<View style={styles.footerRow}>
 					<PressableBox
@@ -917,15 +1127,17 @@ function Assistant() {
 						pressedStyle={styles.pressedStrong}
 						style={[
 							styles.convertButton,
+							config.tint.bg,
 							(!turns.length || isBusy) && styles.convertButtonDisabled,
 						]}
 					>
 						{phase.kind === "converting" && (
-							<ActivityIndicator color="#122014" size="small" />
+							<ActivityIndicator color={config.inkColor} size="small" />
 						)}
 						<Text
 							style={[
 								styles.convertText,
+								config.tint.ink,
 								(!turns.length || isBusy) && styles.convertTextDisabled,
 							]}
 						>
@@ -944,18 +1156,24 @@ function Assistant() {
 							pressedStyle={styles.pressedStrong}
 							style={[
 								styles.micButton,
+								config.tint.glow,
 								isRecording && styles.micButtonRecording,
 								!canRecord && styles.micButtonDisabled,
 							]}
 						>
 							<Text
-								style={[styles.micGlyph, !canRecord && styles.micGlyphDisabled]}
+								style={[
+									styles.micGlyph,
+									config.tint.ink,
+									!canRecord && styles.micGlyphDisabled,
+								]}
 							>
 								{isRecording ? "■" : "●"}
 							</Text>
 						</PressableBox>
 					</Animated.View>
 				</View>
+				<ModeTabs active={mode} locked={isRecording} onSelect={selectMode} />
 			</View>
 		</View>
 	);
@@ -1256,6 +1474,7 @@ const styles = StyleSheet.create({
 	shareText: { color: "#122014", fontSize: 14, fontWeight: "800" },
 	newSessionButton: { alignItems: "center", paddingVertical: 14 },
 	newSessionText: { color: "#9FB89F", fontSize: 13, fontWeight: "700" },
+	newSessionTextDisabled: { color: "#5C6F60" },
 	footer: {
 		backgroundColor: "#0D1210",
 		borderTopColor: "#1D2A20",
@@ -1324,6 +1543,17 @@ const styles = StyleSheet.create({
 	},
 	micGlyph: { color: "#102015", fontSize: 22, fontWeight: "800" },
 	micGlyphDisabled: { color: "#8A9C8C" },
+	tabBar: {
+		borderTopColor: "#1A251C",
+		borderTopWidth: 1,
+		flexDirection: "row",
+		marginTop: 12,
+		paddingTop: 8,
+	},
+	tab: { alignItems: "center", flex: 1, gap: 2, paddingVertical: 6 },
+	tabLocked: { opacity: 0.35 },
+	tabGlyph: { color: "#8CA391", fontSize: 15, lineHeight: 18 },
+	tabLabel: { color: "#8CA391", fontSize: 11, fontWeight: "700" },
 	pressedSoft: { opacity: 0.6 },
 	pressedStrong: { opacity: 0.82 },
 });
