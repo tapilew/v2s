@@ -8,27 +8,48 @@ import {
 	setAudioModeAsync,
 	useAudioRecorder,
 } from "expo-audio";
+import { File, Paths } from "expo-file-system";
+import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import {
 	ActivityIndicator,
 	Animated,
 	Easing,
-	Platform,
 	Pressable,
+	type PressableProps,
 	ScrollView,
 	Share,
+	type StyleProp,
 	StyleSheet,
 	Text,
+	useWindowDimensions,
 	View,
+	type ViewStyle,
 } from "react-native";
+import {
+	SafeAreaProvider,
+	useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 type ModelProgressUpdate = { percentage: number };
 type QvacSdk = typeof import("@qvac/sdk");
 type ModelName = "asr" | "llm";
 type ModelIds = { asr: string | null; llm: string | null };
 type CapturedTurn = { id: string; content: string };
-type SpreadsheetData = { title: string; columns: string[]; rows: string[][] };
+type SpreadsheetData = {
+	title: string;
+	columns: string[];
+	rows: string[][];
+	fallback: boolean;
+};
 
 type AssistantPhase =
 	| { kind: "booting" }
@@ -37,7 +58,7 @@ type AssistantPhase =
 	| { kind: "recording" }
 	| { kind: "transcribing" }
 	| { kind: "converting" }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string; scope: "models" | "capture" };
 
 const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
 let qvacSdk: QvacSdk | null = null;
@@ -61,6 +82,7 @@ const RECORDING_OPTIONS: RecordingOptions = {
 	sampleRate: 16000,
 	numberOfChannels: 1,
 	bitRate: 64000,
+	isMeteringEnabled: true,
 	android: {
 		extension: ".m4a",
 		outputFormat: "mpeg4",
@@ -77,6 +99,16 @@ const RECORDING_OPTIONS: RecordingOptions = {
 	web: { mimeType: "audio/mp4", bitsPerSecond: 64000 },
 };
 
+const METER_BARS = 9;
+const MODEL_LABELS: Record<ModelName, string> = {
+	asr: "reconocimiento de voz",
+	llm: "organización en tablas",
+};
+const MODEL_SIZES: Record<ModelName, string> = {
+	asr: "~45 MB",
+	llm: "~750 MB",
+};
+
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const errorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Ocurrió un error inesperado.";
@@ -88,10 +120,32 @@ const isMeaningfulTranscript = (text: string) => {
 	return normalized.replace(/[^\p{L}\p{N}]/gu, "").length >= 3;
 };
 
+const formatClock = (totalSeconds: number) => {
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+};
+
+const countLabel = (count: number) =>
+	`${count} ${count === 1 ? "fragmento" : "fragmentos"}`;
+
+const rowLabel = (count: number) =>
+	`${count} ${count === 1 ? "fila" : "filas"}`;
+
+const slugify = (value: string) =>
+	value
+		.normalize("NFD")
+		.replace(/[̀-ͯ]/g, "")
+		.replace(/[^a-zA-Z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.toLowerCase()
+		.slice(0, 40) || "hoja";
+
 const fallbackSpreadsheet = (turns: CapturedTurn[]): SpreadsheetData => ({
 	title: "Conversación sin clasificar",
 	columns: ["#", "Fragmento de conversación"],
 	rows: turns.map((turn, index) => [String(index + 1), turn.content]),
+	fallback: true,
 });
 
 const normalizeSpreadsheet = (
@@ -123,13 +177,15 @@ const normalizeSpreadsheet = (
 		})
 		.filter((row): row is string[] => row !== null)
 		.map((row) => columns.map((_, index) => (row[index] ?? "—").trim() || "—"));
+	if (!rows.length) return fallbackSpreadsheet(turns);
 	return {
 		title:
 			typeof candidate.title === "string" && candidate.title.trim()
 				? candidate.title.trim()
 				: "Conversación organizada",
 		columns,
-		rows: rows.length ? rows : fallbackSpreadsheet(turns).rows,
+		rows,
+		fallback: false,
 	};
 };
 
@@ -149,18 +205,96 @@ const toCsv = (sheet: SpreadsheetData) =>
 		.map((row) => row.map(csvCell).join(","))
 		.join("\n");
 
-export default function App() {
+/**
+ * NativeWind drops the styles of a Pressable that uses the `style={({ pressed }) => ...}`
+ * callback form, which left the mic and convert buttons unstyled on Android. Tracking the
+ * press in state keeps the visual feedback while passing a plain style array.
+ */
+type PressableBoxProps = Omit<PressableProps, "style" | "children"> & {
+	style?: StyleProp<ViewStyle>;
+	pressedStyle?: StyleProp<ViewStyle>;
+	children: ReactNode;
+};
+
+function PressableBox({
+	style,
+	pressedStyle,
+	children,
+	...props
+}: PressableBoxProps) {
+	const [pressed, setPressed] = useState(false);
+	return (
+		<Pressable
+			accessibilityRole="button"
+			{...props}
+			onPressIn={() => setPressed(true)}
+			onPressOut={() => setPressed(false)}
+			style={[style, pressed ? pressedStyle : null]}
+		>
+			{children}
+		</Pressable>
+	);
+}
+
+function SectionHeading({
+	label,
+	title,
+	badge,
+}: {
+	label: string;
+	title: string;
+	badge?: ReactNode;
+}) {
+	return (
+		<View style={styles.sectionHeading}>
+			<View style={styles.sectionHeadingCopy}>
+				<Text style={styles.sectionLabel}>{label}</Text>
+				<Text numberOfLines={2} style={styles.sectionTitle}>
+					{title}
+				</Text>
+			</View>
+			{badge}
+		</View>
+	);
+}
+
+function LevelMeter({ level }: { level: number }) {
+	return (
+		<View style={styles.meter}>
+			{Array.from({ length: METER_BARS }, (_, index) => {
+				const distance = Math.abs(index - (METER_BARS - 1) / 2);
+				const falloff = 1 - distance / METER_BARS;
+				const height = Math.round(5 + falloff * 7 + level * falloff * 20);
+				return (
+					// biome-ignore lint/suspicious/noArrayIndexKey: bars are positional, not data.
+					<View key={index} style={[styles.meterBar, { height }]} />
+				);
+			})}
+		</View>
+	);
+}
+
+function Assistant() {
 	const recorder = useAudioRecorder(RECORDING_OPTIONS);
+	const insets = useSafeAreaInsets();
+	const { width } = useWindowDimensions();
 	const [phase, setPhase] = useState<AssistantPhase>({ kind: "booting" });
 	const [turns, setTurns] = useState<CapturedTurn[]>([]);
 	const [spreadsheet, setSpreadsheet] = useState<SpreadsheetData | null>(null);
 	const [recordingSeconds, setRecordingSeconds] = useState(0);
+	const [level, setLevel] = useState(0);
 	const [modelAttempt, setModelAttempt] = useState(0);
+	const [footerHeight, setFooterHeight] = useState(0);
 	const loadedModels = useRef<ModelIds>({ asr: null, llm: null });
+	const scrollRef = useRef<ScrollView>(null);
 	const pulse = useRef(new Animated.Value(1)).current;
 	const demoTurn = useRef(0);
 	const isBusy = phase.kind === "transcribing" || phase.kind === "converting";
-	const canRecord = phase.kind === "ready" || phase.kind === "recording";
+	const isRecording = phase.kind === "recording";
+	const canRecord = phase.kind === "ready" || isRecording;
+	const modelsReady =
+		uiOnly ||
+		(loadedModels.current.asr !== null && loadedModels.current.llm !== null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally retries initialization.
 	useEffect(() => {
@@ -216,7 +350,11 @@ export default function App() {
 				setPhase({ kind: "ready" });
 			} catch (error) {
 				if (!cancelled)
-					setPhase({ kind: "error", message: errorMessage(error) });
+					setPhase({
+						kind: "error",
+						message: errorMessage(error),
+						scope: "models",
+					});
 			}
 		};
 		void initializeModels();
@@ -237,7 +375,7 @@ export default function App() {
 	}, [modelAttempt]);
 
 	useEffect(() => {
-		if (phase.kind !== "recording") {
+		if (!isRecording) {
 			pulse.stopAnimation();
 			pulse.setValue(1);
 			return;
@@ -245,7 +383,7 @@ export default function App() {
 		const animation = Animated.loop(
 			Animated.sequence([
 				Animated.timing(pulse, {
-					toValue: 1.08,
+					toValue: 1.06,
 					duration: 850,
 					easing: Easing.inOut(Easing.ease),
 					useNativeDriver: true,
@@ -260,23 +398,45 @@ export default function App() {
 		);
 		animation.start();
 		return () => animation.stop();
-	}, [phase.kind, pulse]);
+	}, [isRecording, pulse]);
 
 	useEffect(() => {
-		if (phase.kind !== "recording") return;
-		const interval = setInterval(
-			() => setRecordingSeconds((seconds) => seconds + 1),
-			1000,
-		);
+		if (!isRecording) {
+			setLevel(0);
+			return;
+		}
+		const started = Date.now();
+		const interval = setInterval(() => {
+			const elapsed = Date.now() - started;
+			if (uiOnly) {
+				setRecordingSeconds(Math.floor(elapsed / 1000));
+				const t = elapsed / 1000;
+				const wave =
+					0.4 +
+					0.3 * Math.sin(t * 5.1) * Math.sin(t * 1.7) +
+					0.2 * Math.sin(t * 11);
+				setLevel(Math.max(0.05, Math.min(1, wave)));
+				return;
+			}
+			const status = recorder.getStatus();
+			setRecordingSeconds(
+				typeof status.durationMillis === "number"
+					? Math.floor(status.durationMillis / 1000)
+					: Math.floor(elapsed / 1000),
+			);
+			const metering = status.metering;
+			if (typeof metering === "number")
+				setLevel(Math.max(0, Math.min(1, (metering + 60) / 60)));
+		}, 100);
 		return () => clearInterval(interval);
-	}, [phase.kind]);
+	}, [isRecording, recorder]);
 
 	const statusText = useMemo(() => {
 		switch (phase.kind) {
 			case "booting":
 				return "Preparando tu espacio";
 			case "loading":
-				return `Cargando modelo de ${phase.model === "asr" ? "voz" : "hoja"}`;
+				return `Descargando ${MODEL_LABELS[phase.model]}`;
 			case "ready":
 				return turns.length
 					? "Sigue agregando o crea tu hoja"
@@ -288,14 +448,34 @@ export default function App() {
 			case "converting":
 				return "Ordenando la conversación";
 			case "error":
-				return "No se pudo continuar";
+				return phase.scope === "models"
+					? "No se pudieron cargar los modelos"
+					: "No se pudo guardar ese fragmento";
 		}
 	}, [phase, turns.length]);
 
-	const appendTurn = (content: string) => {
+	const statusCaption = useMemo(() => {
+		switch (phase.kind) {
+			case "loading":
+				return `Modelo ${phase.model === "asr" ? 1 : 2} de 2 · ${MODEL_SIZES[phase.model]} · descarga única, después funciona sin conexión`;
+			case "recording":
+				return "Pulsa de nuevo cuando termines este fragmento";
+			case "error":
+				return phase.message;
+			default:
+				return "Tu audio y tus datos se quedan en este dispositivo";
+		}
+	}, [phase]);
+
+	const appendTurn = useCallback((content: string) => {
 		setTurns((current) => [...current, { id: makeId(), content }]);
 		setSpreadsheet(null);
 		setPhase({ kind: "ready" });
+	}, []);
+
+	const removeTurn = (id: string) => {
+		setTurns((current) => current.filter((turn) => turn.id !== id));
+		setSpreadsheet(null);
 	};
 
 	const stopRecording = async () => {
@@ -322,10 +502,22 @@ export default function App() {
 					audioChunk: toLocalPath(uri),
 				})
 			).trim();
-			if (isMeaningfulTranscript(transcript)) appendTurn(transcript);
-			else setPhase({ kind: "ready" });
+			if (isMeaningfulTranscript(transcript)) {
+				appendTurn(transcript);
+				return;
+			}
+			setPhase({
+				kind: "error",
+				message:
+					"No se escuchó voz en ese fragmento. Acerca el micrófono e inténtalo otra vez.",
+				scope: "capture",
+			});
 		} catch (error) {
-			setPhase({ kind: "error", message: errorMessage(error) });
+			setPhase({
+				kind: "error",
+				message: errorMessage(error),
+				scope: "capture",
+			});
 		}
 	};
 
@@ -346,7 +538,11 @@ export default function App() {
 			setRecordingSeconds(0);
 			setPhase({ kind: "recording" });
 		} catch (error) {
-			setPhase({ kind: "error", message: errorMessage(error) });
+			setPhase({
+				kind: "error",
+				message: errorMessage(error),
+				scope: "capture",
+			});
 		}
 	};
 
@@ -355,7 +551,18 @@ export default function App() {
 		const capturedTurns = turns;
 		setPhase({ kind: "converting" });
 		if (uiOnly) {
-			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
+			setSpreadsheet({
+				title: "Plan de acción del equipo de marketing",
+				columns: ["Tarea", "Responsable", "Fecha", "Estado", "Notas"],
+				rows: capturedTurns.map((turn, index) => [
+					turn.content.split(" ").slice(0, 4).join(" "),
+					index % 2 === 0 ? "Ana" : "Marcos",
+					index % 2 === 0 ? "viernes" : "—",
+					index % 2 === 0 ? "Pendiente" : "En pausa",
+					index % 2 === 0 ? "Confirmar con dirección" : "—",
+				]),
+				fallback: false,
+			});
 			setPhase({ kind: "ready" });
 			return;
 		}
@@ -395,19 +602,74 @@ export default function App() {
 		setPhase({ kind: "ready" });
 	};
 
-	const shareSpreadsheet = async () => {
-		if (spreadsheet)
-			await Share.share({
-				title: `${spreadsheet.title}.csv`,
-				message: toCsv(spreadsheet),
-			});
+	const retry = () => {
+		if (phase.kind === "error" && phase.scope === "capture" && modelsReady) {
+			setPhase({ kind: "ready" });
+			return;
+		}
+		setModelAttempt((attempt) => attempt + 1);
 	};
+
+	const shareSpreadsheet = async () => {
+		if (!spreadsheet) return;
+		const csv = toCsv(spreadsheet);
+		const filename = `${slugify(spreadsheet.title)}.csv`;
+		try {
+			if (!(await Sharing.isAvailableAsync())) throw new Error("unavailable");
+			const file = new File(Paths.cache, filename);
+			if (file.exists) file.delete();
+			file.create();
+			file.write(csv);
+			await Sharing.shareAsync(file.uri, {
+				dialogTitle: spreadsheet.title,
+				mimeType: "text/csv",
+				UTI: "public.comma-separated-values-text",
+			});
+		} catch {
+			await Share.share({ message: csv, title: filename }).catch(
+				() => undefined,
+			);
+		}
+	};
+
+	const columnWidths = useMemo(() => {
+		if (!spreadsheet) return [];
+		const raw = spreadsheet.columns.map((column, index) => {
+			const longest = spreadsheet.rows.reduce(
+				(max, row) => Math.max(max, (row[index] ?? "").length),
+				column.length,
+			);
+			return Math.min(210, Math.max(58, longest * 7.1 + 26));
+		});
+		const total = raw.reduce((sum, value) => sum + value, 0);
+		const available = width - 42;
+		if (total >= available) return raw;
+		return raw.map((value) => value + (available - total) * (value / total));
+	}, [spreadsheet, width]);
+
+	const tableWidth = columnWidths.reduce((sum, value) => sum + value, 0);
+	const tableScrolls = tableWidth > width - 42;
+
+	useEffect(() => {
+		if (!turns.length) return;
+		const timeout = setTimeout(
+			() => scrollRef.current?.scrollToEnd({ animated: true }),
+			80,
+		);
+		return () => clearTimeout(timeout);
+	}, [turns.length]);
+
+	const errored = phase.kind === "error";
 
 	return (
 		<View style={styles.safeArea}>
 			<StatusBar style="light" />
 			<ScrollView
-				contentContainerStyle={styles.container}
+				contentContainerStyle={[
+					styles.container,
+					{ paddingBottom: footerHeight + 24, paddingTop: insets.top + 12 },
+				]}
+				ref={scrollRef}
 				showsVerticalScrollIndicator={false}
 			>
 				<View style={styles.header}>
@@ -415,9 +677,13 @@ export default function App() {
 						<View style={styles.logoMark}>
 							<Text style={styles.logoWave}>∿</Text>
 						</View>
-						<View>
-							<Text style={styles.eyebrow}>V2S / VOICE TO SPREADSHEET</Text>
-							<Text style={styles.title}>Habla. Se ordena.</Text>
+						<View style={styles.brandCopy}>
+							<Text numberOfLines={1} style={styles.eyebrow}>
+								V2S / VOICE TO SPREADSHEET
+							</Text>
+							<Text numberOfLines={1} style={styles.title}>
+								Habla. Se ordena.
+							</Text>
 						</View>
 					</View>
 					<View style={styles.localBadge}>
@@ -426,42 +692,65 @@ export default function App() {
 					</View>
 				</View>
 
-				<View style={styles.statusCard}>
-					<View style={styles.statusIcon}>
-						{phase.kind === "loading" || isBusy ? (
-							<ActivityIndicator color="#B8F56F" size="small" />
-						) : (
-							<View style={styles.statusDot} />
-						)}
-					</View>
-					<View style={styles.statusCopy}>
-						<Text style={styles.statusTitle}>{statusText}</Text>
-						<Text style={styles.statusCaption}>
-							{phase.kind === "loading"
-								? `${phase.progress}% · Descarga única, luego funciona sin conexión`
-								: phase.kind === "recording"
-									? "Pulsa de nuevo cuando termines este fragmento"
-									: "Tu audio y tus datos se quedan en este dispositivo"}
-						</Text>
+				<View style={[styles.statusCard, errored && styles.statusCardError]}>
+					<View style={styles.statusRow}>
+						<View
+							style={[styles.statusIcon, errored && styles.statusIconError]}
+						>
+							{phase.kind === "loading" || isBusy ? (
+								<ActivityIndicator color="#B8F56F" size="small" />
+							) : (
+								<View
+									style={[styles.statusDot, errored && styles.statusDotError]}
+								/>
+							)}
+						</View>
+						<View style={styles.statusCopy}>
+							<Text style={styles.statusTitle}>{statusText}</Text>
+							<Text
+								style={[
+									styles.statusCaption,
+									errored && styles.statusCaptionError,
+								]}
+							>
+								{statusCaption}
+							</Text>
+						</View>
 					</View>
 					{phase.kind === "loading" && (
-						<View style={styles.progressTrack}>
-							<View
-								style={[styles.progressFill, { width: `${phase.progress}%` }]}
-							/>
+						<View style={styles.progressBlock}>
+							<View style={styles.progressTrack}>
+								<View
+									style={[styles.progressFill, { width: `${phase.progress}%` }]}
+								/>
+							</View>
+							<Text style={styles.progressValue}>{phase.progress}%</Text>
 						</View>
+					)}
+					{errored && (
+						<PressableBox
+							onPress={retry}
+							pressedStyle={styles.pressedSoft}
+							style={styles.retryButton}
+						>
+							<Text style={styles.retryText}>
+								{phase.scope === "models" && !modelsReady
+									? "Reintentar descarga"
+									: "Volver a intentar"}
+							</Text>
+						</PressableBox>
 					)}
 				</View>
 
-				<View style={styles.sectionHeading}>
-					<View>
-						<Text style={styles.sectionLabel}>CAPTURA</Text>
-						<Text style={styles.sectionTitle}>Conversación</Text>
-					</View>
-					<View style={styles.countBadge}>
-						<Text style={styles.countText}>{turns.length} fragmentos</Text>
-					</View>
-				</View>
+				<SectionHeading
+					badge={
+						<View style={styles.countBadge}>
+							<Text style={styles.countText}>{countLabel(turns.length)}</Text>
+						</View>
+					}
+					label="CAPTURA"
+					title="Conversación"
+				/>
 
 				{turns.length === 0 ? (
 					<View style={styles.emptyState}>
@@ -484,39 +773,86 @@ export default function App() {
 									</Text>
 								</View>
 								<Text style={styles.turnText}>{turn.content}</Text>
+								<PressableBox
+									accessibilityLabel={`Borrar fragmento ${index + 1}`}
+									hitSlop={10}
+									onPress={() => removeTurn(turn.id)}
+									pressedStyle={styles.pressedSoft}
+									style={styles.turnDelete}
+								>
+									<Text style={styles.turnDeleteGlyph}>×</Text>
+								</PressableBox>
 							</View>
 						))}
 					</View>
 				)}
 
-				{spreadsheet ? (
+				{spreadsheet && (
 					<View style={styles.sheetSection}>
-						<View style={styles.sectionHeading}>
-							<View>
-								<Text style={styles.sectionLabel}>RESULTADO</Text>
-								<Text style={styles.sectionTitle}>{spreadsheet.title}</Text>
-							</View>
-							<View style={styles.csvBadge}>
-								<Text style={styles.csvText}>
-									CSV · {spreadsheet.rows.length} filas
+						<SectionHeading
+							badge={
+								<View style={styles.csvBadge}>
+									<Text style={styles.csvText}>
+										CSV · {rowLabel(spreadsheet.rows.length)}
+									</Text>
+								</View>
+							}
+							label="RESULTADO"
+							title={spreadsheet.title}
+						/>
+
+						{spreadsheet.fallback && (
+							<View style={styles.fallbackNotice}>
+								<Text style={styles.fallbackText}>
+									El modelo no devolvió una tabla utilizable, así que aquí está
+									la conversación tal cual.
 								</Text>
+								<PressableBox
+									onPress={() => void generateSpreadsheet()}
+									pressedStyle={styles.pressedSoft}
+									style={styles.fallbackButton}
+								>
+									<Text style={styles.fallbackButtonText}>
+										Intentar organizar otra vez
+									</Text>
+								</PressableBox>
 							</View>
-						</View>
-						<ScrollView horizontal showsHorizontalScrollIndicator={false}>
-							<View style={styles.table}>
+						)}
+
+						<ScrollView
+							horizontal
+							showsHorizontalScrollIndicator={tableScrolls}
+						>
+							<View style={[styles.table, { width: tableWidth }]}>
 								<View style={[styles.tableRow, styles.tableHeader]}>
-									{spreadsheet.columns.map((column) => (
-										<Text key={column} style={[styles.cell, styles.headerCell]}>
+									{spreadsheet.columns.map((column, index) => (
+										<Text
+											key={column}
+											style={[
+												styles.cell,
+												styles.headerCell,
+												{ width: columnWidths[index] },
+											]}
+										>
 											{column}
 										</Text>
 									))}
 								</View>
-								{spreadsheet.rows.map((row) => {
-									const rowKey = row.join("\u0001");
+								{spreadsheet.rows.map((row, rowIndex) => {
+									const rowKey = `${rowIndex}-${row.join("")}`;
 									return (
-										<View key={rowKey} style={styles.tableRow}>
-											{row.map((cell) => (
-												<Text key={`${rowKey}-${cell}`} style={styles.cell}>
+										<View
+											key={rowKey}
+											style={[
+												styles.tableRow,
+												rowIndex % 2 === 1 && styles.tableRowAlt,
+											]}
+										>
+											{row.map((cell, index) => (
+												<Text
+													key={`${rowKey}-${spreadsheet.columns[index]}`}
+													style={[styles.cell, { width: columnWidths[index] }]}
+												>
 													{cell}
 												</Text>
 											))}
@@ -525,99 +861,130 @@ export default function App() {
 								})}
 							</View>
 						</ScrollView>
-						<Pressable
+
+						{tableScrolls && (
+							<Text style={styles.tableHint}>
+								Desliza la tabla para ver el resto de las columnas
+							</Text>
+						)}
+
+						<PressableBox
 							onPress={() => void shareSpreadsheet()}
+							pressedStyle={styles.pressedStrong}
 							style={styles.shareButton}
 						>
 							<Text style={styles.shareIcon}>↗</Text>
 							<Text style={styles.shareText}>Compartir como CSV</Text>
-						</Pressable>
-						<Pressable onPress={resetSession} style={styles.newSessionButton}>
+						</PressableBox>
+						<PressableBox
+							onPress={resetSession}
+							pressedStyle={styles.pressedSoft}
+							style={styles.newSessionButton}
+						>
 							<Text style={styles.newSessionText}>Nueva conversación</Text>
-						</Pressable>
-					</View>
-				) : (
-					<View style={styles.controls}>
-						<Text style={styles.helperText}>
-							{phase.kind === "recording"
-								? `Grabando · 00:${String(recordingSeconds).padStart(2, "0")}`
-								: "Toca para añadir un fragmento"}
-						</Text>
-						<Animated.View style={{ transform: [{ scale: pulse }] }}>
-							<Pressable
-								accessibilityLabel={
-									phase.kind === "recording"
-										? "Detener grabación"
-										: "Grabar fragmento"
-								}
-								disabled={!canRecord}
-								onPress={() =>
-									phase.kind === "recording"
-										? void stopRecording()
-										: void startRecording()
-								}
-								style={({ pressed }) => [
-									styles.micButton,
-									phase.kind === "recording" && styles.micButtonRecording,
-									!canRecord && styles.micButtonDisabled,
-									pressed && styles.micButtonPressed,
-								]}
-							>
-								<Text style={styles.micGlyph}>
-									{phase.kind === "recording" ? "■" : "●"}
-								</Text>
-							</Pressable>
-						</Animated.View>
-						<Text style={styles.privacyText}>
-							Procesamiento privado · sin nube
-						</Text>
-						<Pressable
-							disabled={!turns.length || isBusy}
-							onPress={() => void generateSpreadsheet()}
-							style={({ pressed }) => [
-								styles.convertButton,
-								(!turns.length || isBusy) && styles.convertButtonDisabled,
-								pressed && styles.convertButtonPressed,
-							]}
-						>
-							{phase.kind === "converting" && (
-								<ActivityIndicator color="#122014" size="small" />
-							)}
-							<Text style={styles.convertText}>Convertir en hoja</Text>
-						</Pressable>
-					</View>
-				)}
-
-				{phase.kind === "error" && (
-					<View style={styles.errorPanel}>
-						<Text style={styles.errorText}>{phase.message}</Text>
-						<Pressable
-							onPress={() => setModelAttempt((attempt) => attempt + 1)}
-							style={styles.retryButton}
-						>
-							<Text style={styles.retryText}>Reintentar</Text>
-						</Pressable>
+						</PressableBox>
 					</View>
 				)}
 			</ScrollView>
+
+			<View
+				onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
+				style={[
+					styles.footer,
+					{ paddingBottom: Math.max(insets.bottom, 10) + 10 },
+				]}
+			>
+				{isRecording ? (
+					<View style={styles.footerStatus}>
+						<LevelMeter level={level} />
+						<Text style={styles.footerTimer}>
+							{formatClock(recordingSeconds)}
+						</Text>
+					</View>
+				) : (
+					<Text style={styles.footerHint}>
+						{isBusy
+							? statusText
+							: turns.length
+								? "Añade otro fragmento o crea la hoja"
+								: "Toca el micrófono y habla"}
+					</Text>
+				)}
+				<View style={styles.footerRow}>
+					<PressableBox
+						disabled={!turns.length || isBusy}
+						onPress={() => void generateSpreadsheet()}
+						pressedStyle={styles.pressedStrong}
+						style={[
+							styles.convertButton,
+							(!turns.length || isBusy) && styles.convertButtonDisabled,
+						]}
+					>
+						{phase.kind === "converting" && (
+							<ActivityIndicator color="#122014" size="small" />
+						)}
+						<Text
+							style={[
+								styles.convertText,
+								(!turns.length || isBusy) && styles.convertTextDisabled,
+							]}
+						>
+							{spreadsheet ? "Actualizar hoja" : "Convertir en hoja"}
+						</Text>
+					</PressableBox>
+					<Animated.View style={{ transform: [{ scale: pulse }] }}>
+						<PressableBox
+							accessibilityLabel={
+								isRecording ? "Detener grabación" : "Grabar fragmento"
+							}
+							disabled={!canRecord}
+							onPress={() =>
+								isRecording ? void stopRecording() : void startRecording()
+							}
+							pressedStyle={styles.pressedStrong}
+							style={[
+								styles.micButton,
+								isRecording && styles.micButtonRecording,
+								!canRecord && styles.micButtonDisabled,
+							]}
+						>
+							<Text
+								style={[styles.micGlyph, !canRecord && styles.micGlyphDisabled]}
+							>
+								{isRecording ? "■" : "●"}
+							</Text>
+						</PressableBox>
+					</Animated.View>
+				</View>
+			</View>
 		</View>
 	);
 }
 
+export default function App() {
+	return (
+		<SafeAreaProvider>
+			<Assistant />
+		</SafeAreaProvider>
+	);
+}
+
 const styles = StyleSheet.create({
-	safeArea: { flex: 1, backgroundColor: "#0B0F0E" },
-	container: {
-		paddingHorizontal: 20,
-		paddingTop: Platform.OS === "android" ? 18 : 8,
-		paddingBottom: 34,
-	},
+	safeArea: { backgroundColor: "#0B0F0E", flex: 1 },
+	container: { paddingHorizontal: 20 },
 	header: {
 		alignItems: "center",
 		flexDirection: "row",
 		justifyContent: "space-between",
 		paddingBottom: 20,
 	},
-	brandLockup: { alignItems: "center", flex: 1, flexDirection: "row" },
+	brandLockup: {
+		alignItems: "center",
+		flexDirection: "row",
+		flexShrink: 1,
+		minWidth: 0,
+	},
+	brandCopy: { flexShrink: 1, minWidth: 0 },
 	logoMark: {
 		alignItems: "center",
 		backgroundColor: "#B8F56F",
@@ -641,7 +1008,7 @@ const styles = StyleSheet.create({
 	},
 	title: {
 		color: "#F1F7EE",
-		fontSize: 29,
+		fontSize: 27,
 		fontWeight: "700",
 		letterSpacing: -0.8,
 		marginTop: 4,
@@ -653,6 +1020,8 @@ const styles = StyleSheet.create({
 		borderRadius: 20,
 		borderWidth: 1,
 		flexDirection: "row",
+		flexShrink: 0,
+		marginLeft: 10,
 		paddingHorizontal: 9,
 		paddingVertical: 7,
 	},
@@ -665,15 +1034,14 @@ const styles = StyleSheet.create({
 	},
 	localText: { color: "#BED4BD", fontSize: 11, fontWeight: "700" },
 	statusCard: {
-		alignItems: "center",
 		backgroundColor: "#121A15",
 		borderColor: "#243226",
 		borderRadius: 18,
 		borderWidth: 1,
-		flexDirection: "row",
-		minHeight: 76,
 		padding: 14,
 	},
+	statusCardError: { borderColor: "#6A4A32" },
+	statusRow: { alignItems: "center", flexDirection: "row" },
 	statusIcon: {
 		alignItems: "center",
 		backgroundColor: "#1C2A1E",
@@ -682,29 +1050,49 @@ const styles = StyleSheet.create({
 		justifyContent: "center",
 		width: 40,
 	},
+	statusIconError: { backgroundColor: "#2E2117" },
 	statusDot: {
 		backgroundColor: "#B8F56F",
 		borderRadius: 5,
 		height: 10,
 		width: 10,
 	},
+	statusDotError: { backgroundColor: "#F0B37A" },
 	statusCopy: { flex: 1, marginLeft: 12 },
 	statusTitle: { color: "#EDF5EA", fontSize: 14, fontWeight: "700" },
 	statusCaption: {
-		color: "#89A08D",
-		fontSize: 11,
-		lineHeight: 16,
+		color: "#9CB3A0",
+		fontSize: 12,
+		lineHeight: 17,
 		marginTop: 3,
 	},
+	statusCaptionError: { color: "#F0B37A" },
+	progressBlock: { alignItems: "center", flexDirection: "row", marginTop: 12 },
 	progressTrack: {
 		backgroundColor: "#26362A",
-		borderRadius: 2,
-		height: 4,
-		marginLeft: 10,
+		borderRadius: 3,
+		flex: 1,
+		height: 6,
 		overflow: "hidden",
-		width: 42,
 	},
-	progressFill: { backgroundColor: "#B8F56F", borderRadius: 2, height: "100%" },
+	progressFill: { backgroundColor: "#B8F56F", borderRadius: 3, height: "100%" },
+	progressValue: {
+		color: "#B8F56F",
+		fontSize: 12,
+		fontWeight: "800",
+		marginLeft: 10,
+		minWidth: 40,
+		textAlign: "right",
+	},
+	retryButton: {
+		alignSelf: "flex-start",
+		backgroundColor: "#2E2117",
+		borderRadius: 12,
+		marginTop: 12,
+		paddingHorizontal: 16,
+		paddingVertical: 10,
+	},
+	retryText: { color: "#F0B37A", fontSize: 13, fontWeight: "700" },
 	sectionHeading: {
 		alignItems: "center",
 		flexDirection: "row",
@@ -712,8 +1100,9 @@ const styles = StyleSheet.create({
 		marginBottom: 12,
 		marginTop: 27,
 	},
+	sectionHeadingCopy: { flexShrink: 1, minWidth: 0, paddingRight: 10 },
 	sectionLabel: {
-		color: "#748A79",
+		color: "#8CA391",
 		fontSize: 10,
 		fontWeight: "800",
 		letterSpacing: 1.5,
@@ -728,6 +1117,7 @@ const styles = StyleSheet.create({
 	countBadge: {
 		backgroundColor: "#18231B",
 		borderRadius: 12,
+		flexShrink: 0,
 		paddingHorizontal: 10,
 		paddingVertical: 7,
 	},
@@ -758,7 +1148,7 @@ const styles = StyleSheet.create({
 		marginTop: 13,
 	},
 	emptyCopy: {
-		color: "#7F9682",
+		color: "#8FA792",
 		fontSize: 13,
 		lineHeight: 19,
 		marginTop: 7,
@@ -785,65 +1175,37 @@ const styles = StyleSheet.create({
 	},
 	turnNumberText: { color: "#B8F56F", fontSize: 10, fontWeight: "800" },
 	turnText: { color: "#DCE9D9", flex: 1, fontSize: 14, lineHeight: 21 },
-	controls: {
+	turnDelete: {
 		alignItems: "center",
-		borderTopColor: "#1D2A20",
-		borderTopWidth: StyleSheet.hairlineWidth,
-		marginTop: 22,
-		paddingTop: 16,
-	},
-	helperText: { color: "#97AA9A", fontSize: 13, marginBottom: 12 },
-	micButton: {
-		alignItems: "center",
-		backgroundColor: "#B8F56F",
-		borderRadius: 38,
-		elevation: 6,
-		height: 76,
+		height: 28,
 		justifyContent: "center",
-		shadowColor: "#B8F56F",
-		shadowOffset: { height: 6, width: 0 },
-		shadowOpacity: 0.2,
-		shadowRadius: 14,
-		width: 76,
+		marginLeft: 8,
+		width: 28,
 	},
-	micButtonRecording: { backgroundColor: "#F6B8A8", shadowColor: "#F6B8A8" },
-	micButtonDisabled: {
-		backgroundColor: "#39443A",
-		elevation: 0,
-		opacity: 0.65,
-		shadowOpacity: 0,
+	turnDeleteGlyph: { color: "#8CA391", fontSize: 20, lineHeight: 22 },
+	sheetSection: { marginTop: 4 },
+	fallbackNotice: {
+		backgroundColor: "#1B2419",
+		borderColor: "#3C4A2E",
+		borderRadius: 14,
+		borderWidth: 1,
+		marginBottom: 12,
+		padding: 13,
 	},
-	micButtonPressed: { opacity: 0.82 },
-	micGlyph: { color: "#102015", fontSize: 24, fontWeight: "800" },
-	privacyText: { color: "#607264", fontSize: 11, marginTop: 12 },
-	convertButton: {
-		alignItems: "center",
-		backgroundColor: "#B8F56F",
-		borderRadius: 13,
-		flexDirection: "row",
-		justifyContent: "center",
-		marginTop: 18,
-		paddingHorizontal: 20,
-		paddingVertical: 13,
-		width: "100%",
+	fallbackText: { color: "#D9CB9C", fontSize: 12, lineHeight: 18 },
+	fallbackButton: {
+		alignSelf: "flex-start",
+		backgroundColor: "#2A3524",
+		borderRadius: 10,
+		marginTop: 10,
+		paddingHorizontal: 14,
+		paddingVertical: 8,
 	},
-	convertButtonDisabled: { backgroundColor: "#263328" },
-	convertButtonPressed: { opacity: 0.82 },
-	convertText: {
-		color: "#122014",
-		fontSize: 14,
-		fontWeight: "800",
-		marginLeft: 7,
-	},
-	sheetSection: {
-		borderTopColor: "#1D2A20",
-		borderTopWidth: StyleSheet.hairlineWidth,
-		marginTop: 25,
-		paddingTop: 2,
-	},
+	fallbackButtonText: { color: "#C5F99D", fontSize: 12, fontWeight: "700" },
 	csvBadge: {
 		backgroundColor: "#213625",
 		borderRadius: 12,
+		flexShrink: 0,
 		paddingHorizontal: 9,
 		paddingVertical: 7,
 	},
@@ -853,7 +1215,6 @@ const styles = StyleSheet.create({
 		borderColor: "#2A3D2D",
 		borderRadius: 14,
 		borderWidth: 1,
-		minWidth: 520,
 		overflow: "hidden",
 	},
 	tableRow: {
@@ -861,6 +1222,7 @@ const styles = StyleSheet.create({
 		borderTopWidth: StyleSheet.hairlineWidth,
 		flexDirection: "row",
 	},
+	tableRowAlt: { backgroundColor: "#151E18" },
 	tableHeader: { backgroundColor: "#1D3020", borderTopWidth: 0 },
 	cell: {
 		color: "#CFE0CE",
@@ -868,9 +1230,14 @@ const styles = StyleSheet.create({
 		lineHeight: 17,
 		paddingHorizontal: 12,
 		paddingVertical: 11,
-		width: 150,
 	},
 	headerCell: { color: "#B8F56F", fontSize: 11, fontWeight: "800" },
+	tableHint: {
+		color: "#8CA391",
+		fontSize: 11,
+		marginTop: 8,
+		textAlign: "center",
+	},
 	shareButton: {
 		alignItems: "center",
 		backgroundColor: "#B8F56F",
@@ -889,19 +1256,74 @@ const styles = StyleSheet.create({
 	shareText: { color: "#122014", fontSize: 14, fontWeight: "800" },
 	newSessionButton: { alignItems: "center", paddingVertical: 14 },
 	newSessionText: { color: "#9FB89F", fontSize: 13, fontWeight: "700" },
-	errorPanel: { alignItems: "center", paddingBottom: 14, paddingTop: 12 },
-	errorText: {
-		color: "#F6B8A8",
+	footer: {
+		backgroundColor: "#0D1210",
+		borderTopColor: "#1D2A20",
+		borderTopWidth: 1,
+		bottom: 0,
+		left: 0,
+		paddingHorizontal: 20,
+		paddingTop: 12,
+		position: "absolute",
+		right: 0,
+	},
+	footerHint: {
+		color: "#9CB3A0",
 		fontSize: 12,
-		marginBottom: 8,
+		marginBottom: 10,
 		textAlign: "center",
 	},
-	retryButton: {
-		alignSelf: "center",
-		backgroundColor: "#253629",
-		borderRadius: 12,
-		paddingHorizontal: 18,
-		paddingVertical: 10,
+	footerStatus: {
+		alignItems: "center",
+		flexDirection: "row",
+		justifyContent: "center",
+		marginBottom: 10,
 	},
-	retryText: { color: "#C5F99D", fontSize: 13, fontWeight: "700" },
+	footerTimer: {
+		color: "#F6B8A8",
+		fontSize: 13,
+		fontVariant: ["tabular-nums"],
+		fontWeight: "700",
+		marginLeft: 12,
+	},
+	meter: { alignItems: "center", flexDirection: "row", gap: 3, height: 30 },
+	meterBar: { backgroundColor: "#F6B8A8", borderRadius: 2, width: 4 },
+	footerRow: { alignItems: "center", flexDirection: "row", gap: 12 },
+	convertButton: {
+		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 14,
+		flex: 1,
+		flexDirection: "row",
+		gap: 7,
+		justifyContent: "center",
+		paddingHorizontal: 16,
+		paddingVertical: 16,
+	},
+	convertButtonDisabled: { backgroundColor: "#232E25" },
+	convertText: { color: "#122014", fontSize: 14, fontWeight: "800" },
+	convertTextDisabled: { color: "#8A9C8C" },
+	micButton: {
+		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 30,
+		elevation: 6,
+		height: 60,
+		justifyContent: "center",
+		shadowColor: "#B8F56F",
+		shadowOffset: { height: 6, width: 0 },
+		shadowOpacity: 0.2,
+		shadowRadius: 14,
+		width: 60,
+	},
+	micButtonRecording: { backgroundColor: "#F6B8A8", shadowColor: "#F6B8A8" },
+	micButtonDisabled: {
+		backgroundColor: "#232E25",
+		elevation: 0,
+		shadowOpacity: 0,
+	},
+	micGlyph: { color: "#102015", fontSize: 22, fontWeight: "800" },
+	micGlyphDisabled: { color: "#8A9C8C" },
+	pressedSoft: { opacity: 0.6 },
+	pressedStrong: { opacity: 0.82 },
 });
