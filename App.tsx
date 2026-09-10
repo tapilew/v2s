@@ -43,22 +43,47 @@ type ModelProgressUpdate = { percentage: number };
 type QvacSdk = typeof import("@qvac/sdk");
 type ModelName = "asr" | "llm";
 type ModelIds = { asr: string | null; llm: string | null };
-type CapturedTurn = { id: string; content: string };
-type SpreadsheetData = {
-	title: string;
-	columns: string[];
-	rows: string[][];
-	fallback: boolean;
-};
 
 const MODE_ORDER = ["finance", "health"] as const;
 type ModeId = (typeof MODE_ORDER)[number];
+
+const LEDGER_VERSION = 1;
+
+type LedgerEntry = {
+	id: string;
+	at: number;
+	said: string;
+	rows: string[][];
+};
+
+type Ledger = {
+	version: typeof LEDGER_VERSION;
+	mode: ModeId;
+	entries: LedgerEntry[];
+};
+
+type Store = {
+	ledgers: Record<ModeId, Ledger>;
+	quarantined: readonly ModeId[];
+};
+
+type LedgerRead =
+	| { kind: "ok"; ledger: Ledger }
+	| { kind: "absent" }
+	| { kind: "corrupt" };
+
+type LedgerRow = {
+	entryId: string;
+	index: number;
+	cells: readonly string[];
+};
 
 type ModeAccent = {
 	fg: { color: string };
 	bg: { backgroundColor: string };
 	glow: { backgroundColor: string; shadowColor: string };
 	ink: { color: string };
+	fresh: { backgroundColor: string };
 };
 
 type ModeConfig = {
@@ -68,20 +93,21 @@ type ModeConfig = {
 	inkColor: string;
 	tint: ModeAccent;
 	eyebrow: string;
-	captureTitle: string;
+	ledgerTitle: string;
+	csvName: string;
+	columns: readonly [string, ...string[]];
 	emptyTitle: string;
 	emptyCopy: string;
 	readyEmpty: string;
 	readySome: string;
 	footerHintEmpty: string;
 	footerHintSome: string;
-	fallbackTitle: string;
-	prompt: string;
+	promptRole: string;
+	exampleUtterance: string;
+	exampleRows: readonly string[][];
 	demoTurns: readonly string[];
-	demoSheet: (turns: CapturedTurn[]) => SpreadsheetData;
+	demoRows: readonly string[][];
 };
-
-type Session = { turns: CapturedTurn[]; spreadsheet: SpreadsheetData | null };
 
 type AssistantPhase =
 	| { kind: "booting" }
@@ -89,10 +115,8 @@ type AssistantPhase =
 	| { kind: "ready" }
 	| { kind: "recording" }
 	| { kind: "transcribing"; owner: ModeId }
-	| { kind: "converting"; owner: ModeId }
+	| { kind: "ordering"; owner: ModeId }
 	| { kind: "error"; message: string; scope: "models" | "capture" };
-
-const EMPTY_SESSION: Session = { turns: [], spreadsheet: null };
 
 const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
 let qvacSdk: QvacSdk | null = null;
@@ -113,41 +137,32 @@ const MODES: Record<ModeId, ModeConfig> = {
 			bg: { backgroundColor: "#B8F56F" },
 			glow: { backgroundColor: "#B8F56F", shadowColor: "#B8F56F" },
 			ink: { color: "#122014" },
+			fresh: { backgroundColor: "rgba(184, 245, 111, 0.12)" },
 		},
 		eyebrow: "V2S / MODO FINANZAS",
-		captureTitle: "Movimientos",
-		emptyTitle: "Tu hoja de gastos empieza aquí",
+		ledgerTitle: "Movimientos",
+		csvName: "movimientos.csv",
+		columns: ["Concepto", "Monto", "Categoría", "Fecha", "Método"],
+		emptyTitle: "Así se verá tu hoja",
 		emptyCopy:
-			"Di en voz alta lo que gastaste o cobraste. Cada fragmento se convierte en una fila con concepto, monto y fecha.",
+			"Di un gasto o un cobro en voz alta, con su monto. Cada cosa que digas se guarda como una fila.",
 		readyEmpty: "Listo para escuchar tus movimientos",
-		readySome: "Sigue agregando o crea tu hoja",
+		readySome: "Sigue agregando movimientos",
 		footerHintEmpty: "Toca el micrófono y di un gasto",
-		footerHintSome: "Añade otro movimiento o crea la hoja",
-		fallbackTitle: "Movimientos sin clasificar",
-		prompt:
-			"Eres una asistente que convierte conversaciones sobre dinero en datos de hoja de cálculo. " +
-			"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
-			'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
-			'Usa exactamente estas columnas, en este orden: ["Concepto", "Monto", "Categoría", "Fecha", "Método"]. ' +
-			"Escribe el monto tal como se dijo, con su moneda si aparece. " +
-			'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
-			"Si no hay movimientos de dinero, organiza los compromisos o pendientes económicos en filas claras.",
+		footerHintSome: "Añade otro movimiento cuando quieras",
+		promptRole:
+			"Eres una asistente que convierte lo que alguien dice sobre dinero en filas de una hoja de cálculo. " +
+			"Escribe el monto tal como se dijo, con su moneda si aparece.",
+		exampleUtterance: "Me tomé un café de sesenta pesos, pagué en efectivo.",
+		exampleRows: [["Café", "60 pesos", "Comida", "hoy", "Efectivo"]],
 		demoTurns: [
 			"Pagué dos mil pesos de la renta el primero de mayo con transferencia.",
 			"Cobré ochocientos de la clase particular del sábado, todavía en efectivo.",
 		],
-		demoSheet: (turns) => ({
-			title: "Movimientos de mayo",
-			columns: ["Concepto", "Monto", "Categoría", "Fecha", "Método"],
-			rows: turns.map((turn, index) => [
-				turn.content.split(" ").slice(0, 4).join(" "),
-				index % 2 === 0 ? "2000 pesos" : "800 pesos",
-				index % 2 === 0 ? "Vivienda" : "Ingreso",
-				index % 2 === 0 ? "1 de mayo" : "sábado",
-				index % 2 === 0 ? "Transferencia" : "Efectivo",
-			]),
-			fallback: false,
-		}),
+		demoRows: [
+			["Renta", "2000 pesos", "Vivienda", "1 de mayo", "Transferencia"],
+			["Clase particular", "800 pesos", "Ingreso", "sábado", "Efectivo"],
+		],
 	},
 	health: {
 		tabLabel: "Salud",
@@ -159,41 +174,39 @@ const MODES: Record<ModeId, ModeConfig> = {
 			bg: { backgroundColor: "#7FE3D4" },
 			glow: { backgroundColor: "#7FE3D4", shadowColor: "#7FE3D4" },
 			ink: { color: "#0A211D" },
+			fresh: { backgroundColor: "rgba(127, 227, 212, 0.12)" },
 		},
 		eyebrow: "V2S / MODO SALUD",
-		captureTitle: "Registro",
-		emptyTitle: "Tu registro de salud empieza aquí",
+		ledgerTitle: "Registro",
+		csvName: "registro-salud.csv",
+		columns: ["Registro", "Tipo", "Valor", "Fecha", "Notas"],
+		emptyTitle: "Así se verá tu registro",
 		emptyCopy:
-			"Di en voz alta cómo te sientes, qué comiste o qué medicamento tomaste. Cada fragmento se convierte en una fila con fecha y notas.",
+			"Cuenta en voz alta cómo te sientes, qué comiste o qué tomaste. Cada cosa que digas se guarda como una fila.",
 		readyEmpty: "Listo para escuchar tu registro",
-		readySome: "Sigue agregando o crea tu hoja",
+		readySome: "Sigue agregando registros",
 		footerHintEmpty: "Toca el micrófono y cuenta cómo te sientes",
-		footerHintSome: "Añade otro registro o crea la hoja",
-		fallbackTitle: "Registros sin clasificar",
-		prompt:
-			"Eres una asistente que convierte conversaciones sobre salud en datos de hoja de cálculo. " +
-			"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
-			'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
-			'Usa exactamente estas columnas, en este orden: ["Registro", "Tipo", "Valor", "Fecha", "Notas"]. ' +
+		footerHintSome: "Añade otro registro cuando quieras",
+		promptRole:
+			"Eres una asistente que convierte lo que alguien dice sobre su salud en filas de una hoja de cálculo. " +
 			"En Tipo usa una de estas categorías: Síntoma, Comida, Medicamento, Ejercicio o Ánimo. " +
-			'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
-			"No des diagnósticos ni consejos médicos. Solo organiza lo que la persona dijo.",
+			"No des diagnósticos ni consejos médicos.",
+		exampleUtterance: "Me duele la cabeza, como un cuatro de diez.",
+		exampleRows: [["Dolor de cabeza", "Síntoma", "4 de 10", "hoy", "—"]],
 		demoTurns: [
 			"Me duele la cabeza desde la mañana, como un cuatro de diez.",
 			"Tomé el ibuprofeno de las dos y comí ensalada con pollo.",
 		],
-		demoSheet: (turns) => ({
-			title: "Registro de la semana",
-			columns: ["Registro", "Tipo", "Valor", "Fecha", "Notas"],
-			rows: turns.map((turn, index) => [
-				turn.content.split(" ").slice(0, 4).join(" "),
-				index % 2 === 0 ? "Síntoma" : "Medicamento",
-				index % 2 === 0 ? "4 de 10" : "1 dosis",
-				index % 2 === 0 ? "hoy por la mañana" : "hoy a las dos",
-				index % 2 === 0 ? "Sigue al mediodía" : "Con comida",
-			]),
-			fallback: false,
-		}),
+		demoRows: [
+			["Dolor de cabeza", "Síntoma", "4 de 10", "hoy por la mañana", "Sigue"],
+			[
+				"Ibuprofeno",
+				"Medicamento",
+				"1 dosis",
+				"hoy a las dos",
+				"Con ensalada de pollo",
+			],
+		],
 	},
 };
 
@@ -221,6 +234,7 @@ const RECORDING_OPTIONS: RecordingOptions = {
 };
 
 const METER_BARS = 9;
+const HIGHLIGHT_MS = 5000;
 const MODEL_LABELS: Record<ModelName, string> = {
 	asr: "reconocimiento de voz",
 	llm: "organización en tablas",
@@ -247,52 +261,178 @@ const formatClock = (totalSeconds: number) => {
 	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 };
 
-const countLabel = (count: number) =>
-	`${count} ${count === 1 ? "fragmento" : "fragmentos"}`;
-
 const rowLabel = (count: number) =>
 	`${count} ${count === 1 ? "fila" : "filas"}`;
 
-const slugify = (value: string) =>
-	value
-		.normalize("NFD")
-		.replace(/[̀-ͯ]/g, "")
-		.replace(/[^a-zA-Z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.toLowerCase()
-		.slice(0, 40) || "hoja";
+const ledgerName = (mode: ModeId, suffix: string) =>
+	`${uiOnly ? "demo-" : ""}ledger-${mode}${suffix}`;
+const ledgerFile = (mode: ModeId) =>
+	new File(Paths.document, ledgerName(mode, ".json"));
+const tempFile = (mode: ModeId) =>
+	new File(Paths.document, ledgerName(mode, ".tmp.json"));
+const corruptFile = (mode: ModeId) =>
+	new File(Paths.document, ledgerName(mode, `.corrupt-${Date.now()}.json`));
 
-const fallbackSpreadsheet = (
-	turns: CapturedTurn[],
-	title: string,
-): SpreadsheetData => ({
-	title,
-	columns: ["#", "Fragmento de conversación"],
-	rows: turns.map((turn, index) => [String(index + 1), turn.content]),
-	fallback: true,
+const emptyLedger = (mode: ModeId): Ledger => ({
+	version: LEDGER_VERSION,
+	mode,
+	entries: [],
 });
 
-const normalizeSpreadsheet = (
-	value: unknown,
-	turns: CapturedTurn[],
-	fallbackTitle: string,
-): SpreadsheetData => {
-	if (!value || typeof value !== "object")
-		return fallbackSpreadsheet(turns, fallbackTitle);
+const salvageEntry = (value: unknown): LedgerEntry | null => {
+	if (!value || typeof value !== "object") return null;
 	const candidate = value as {
-		title?: unknown;
-		columns?: unknown;
+		id?: unknown;
+		at?: unknown;
+		said?: unknown;
 		rows?: unknown;
 	};
-	const columns = Array.isArray(candidate.columns)
-		? candidate.columns
-				.map(String)
-				.map((column) => column.trim())
-				.filter(Boolean)
+	if (typeof candidate.id !== "string" || typeof candidate.said !== "string")
+		return null;
+	const rows = Array.isArray(candidate.rows)
+		? (candidate.rows as unknown[])
+				.filter((row): row is unknown[] => Array.isArray(row))
+				.map((row) => row.map((cell) => String(cell ?? "—")))
 		: [];
-	if (!columns.length || !Array.isArray(candidate.rows))
-		return fallbackSpreadsheet(turns, fallbackTitle);
-	const rows = candidate.rows
+	return {
+		id: candidate.id,
+		at: typeof candidate.at === "number" ? candidate.at : 0,
+		said: candidate.said,
+		rows,
+	};
+};
+
+const ledgerExists = (mode: ModeId) => {
+	try {
+		return ledgerFile(mode).exists;
+	} catch {
+		return false;
+	}
+};
+
+const readLedger = (mode: ModeId): LedgerRead => {
+	if (!ledgerExists(mode)) return { kind: "absent" };
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(ledgerFile(mode).textSync());
+	} catch {
+		return { kind: "corrupt" };
+	}
+	if (!parsed || typeof parsed !== "object") return { kind: "corrupt" };
+	const candidate = parsed as { version?: unknown; entries?: unknown };
+	if (
+		typeof candidate.version !== "number" ||
+		!Array.isArray(candidate.entries)
+	)
+		return { kind: "corrupt" };
+	if (candidate.version > LEDGER_VERSION) return { kind: "corrupt" };
+	const entries = (candidate.entries as unknown[])
+		.map(salvageEntry)
+		.filter((entry): entry is LedgerEntry => entry !== null);
+	return { kind: "ok", ledger: { version: LEDGER_VERSION, mode, entries } };
+};
+
+const discardTemp = (mode: ModeId) => {
+	try {
+		const temp = tempFile(mode);
+		if (temp.exists) temp.delete();
+	} catch {}
+};
+
+const quarantineLedger = (mode: ModeId) => {
+	try {
+		const file = ledgerFile(mode);
+		if (file.exists) file.moveSync(corruptFile(mode));
+	} catch {}
+};
+
+const loadStore = (): Store => {
+	const quarantined: ModeId[] = [];
+	const load = (mode: ModeId): Ledger => {
+		discardTemp(mode);
+		const read = readLedger(mode);
+		if (read.kind === "ok") return read.ledger;
+		if (read.kind === "corrupt") {
+			quarantineLedger(mode);
+			quarantined.push(mode);
+		}
+		return emptyLedger(mode);
+	};
+	const ledgers = { finance: load("finance"), health: load("health") };
+	return { ledgers, quarantined };
+};
+
+const saveLedger = (ledger: Ledger) => {
+	const temp = tempFile(ledger.mode);
+	if (temp.exists) temp.delete();
+	temp.create();
+	temp.write(JSON.stringify(ledger));
+	temp.moveSync(ledgerFile(ledger.mode), { overwrite: true });
+};
+
+const appendEntry = (ledger: Ledger, entry: LedgerEntry): Ledger =>
+	ledger.entries.some((existing) => existing.id === entry.id)
+		? ledger
+		: { ...ledger, entries: [...ledger.entries, entry] };
+
+const setEntryRows = (
+	ledger: Ledger,
+	id: string,
+	rows: string[][],
+): Ledger => ({
+	...ledger,
+	entries: ledger.entries.map((entry) =>
+		entry.id === id ? { ...entry, rows } : entry,
+	),
+});
+
+const removeEntry = (ledger: Ledger, id: string): Ledger => ({
+	...ledger,
+	entries: ledger.entries.filter((entry) => entry.id !== id),
+});
+
+const ledgerRows = (
+	ledger: Ledger,
+	columns: readonly [string, ...string[]],
+): LedgerRow[] =>
+	ledger.entries.flatMap((entry) =>
+		entry.rows.length
+			? entry.rows.map((cells, index) => ({
+					entryId: entry.id,
+					index,
+					cells,
+				}))
+			: [
+					{
+						entryId: entry.id,
+						index: 0,
+						cells: columns.map((_, index) => (index === 0 ? entry.said : "—")),
+					},
+				],
+	);
+
+const orderPrompt = (config: ModeConfig) =>
+	`${config.promptRole} ` +
+	"Responde solo con un arreglo JSON de arreglos de texto, sin markdown ni explicaciones. " +
+	`Cada fila lleva exactamente ${config.columns.length} celdas, en este orden: ${config.columns.join(", ")}. ` +
+	'No inventes datos: escribe "—" cuando falte información. ' +
+	`Ejemplo. Si la persona dice "${config.exampleUtterance}", respondes ${JSON.stringify(config.exampleRows)}.`;
+
+const parseRows = (
+	response: string,
+	columns: readonly string[],
+): string[][] => {
+	const start = response.indexOf("[");
+	const end = response.lastIndexOf("]");
+	if (start === -1 || end < start) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(response.slice(start, end + 1));
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(parsed)) return [];
+	return (parsed as unknown[])
 		.map((row) => {
 			if (Array.isArray(row)) return row.map((cell) => String(cell ?? "—"));
 			if (row && typeof row === "object") {
@@ -303,41 +443,13 @@ const normalizeSpreadsheet = (
 		})
 		.filter((row): row is string[] => row !== null)
 		.map((row) => columns.map((_, index) => (row[index] ?? "—").trim() || "—"));
-	if (!rows.length) return fallbackSpreadsheet(turns, fallbackTitle);
-	return {
-		title:
-			typeof candidate.title === "string" && candidate.title.trim()
-				? candidate.title.trim()
-				: "Conversación organizada",
-		columns,
-		rows,
-		fallback: false,
-	};
-};
-
-const parseSpreadsheet = (
-	response: string,
-	turns: CapturedTurn[],
-	fallbackTitle: string,
-) => {
-	const jsonCandidate = response.match(/\{[\s\S]*\}/)?.[0];
-	if (!jsonCandidate) return fallbackSpreadsheet(turns, fallbackTitle);
-	try {
-		return normalizeSpreadsheet(
-			JSON.parse(jsonCandidate),
-			turns,
-			fallbackTitle,
-		);
-	} catch {
-		return fallbackSpreadsheet(turns, fallbackTitle);
-	}
 };
 
 const csvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
-const toCsv = (sheet: SpreadsheetData) =>
-	[sheet.columns, ...sheet.rows]
-		.map((row) => row.map(csvCell).join(","))
-		.join("\n");
+const toCsv = (
+	columns: readonly string[],
+	rows: readonly (readonly string[])[],
+) => [columns, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
 
 /**
  * NativeWind drops the styles of a Pressable that uses the `style={({ pressed }) => ...}`
@@ -445,37 +557,116 @@ function ModeTabs({
 	);
 }
 
+function LedgerTable({
+	accent,
+	columns,
+	freshId,
+	muted,
+	rows,
+	widths,
+}: {
+	accent: ModeAccent;
+	columns: readonly string[];
+	freshId?: string | null;
+	muted?: boolean;
+	rows: readonly LedgerRow[];
+	widths: number[];
+}) {
+	const width = widths.reduce((sum, value) => sum + value, 0);
+	return (
+		<View style={[styles.table, muted && styles.tableMuted, { width }]}>
+			<View style={[styles.tableRow, styles.tableHeader]}>
+				{columns.map((column, index) => (
+					<Text
+						key={column}
+						style={[
+							styles.cell,
+							styles.headerCell,
+							accent.fg,
+							{ width: widths[index] },
+						]}
+					>
+						{column}
+					</Text>
+				))}
+			</View>
+			{rows.map((row, rowIndex) => {
+				const key = `${row.entryId}-${row.index}`;
+				const fresh = row.entryId === freshId;
+				return (
+					<View
+						key={key}
+						style={[
+							styles.tableRow,
+							rowIndex % 2 === 1 && styles.tableRowAlt,
+							fresh && accent.fresh,
+						]}
+					>
+						{columns.map((column, index) => (
+							<Text
+								key={`${key}-${column}`}
+								style={[
+									styles.cell,
+									muted && styles.cellMuted,
+									{ width: widths[index] },
+								]}
+							>
+								{fresh && index === 0 ? (
+									<Text style={[styles.freshTag, accent.fg]}>NUEVO </Text>
+								) : null}
+								{row.cells[index] ?? "—"}
+							</Text>
+						))}
+					</View>
+				);
+			})}
+		</View>
+	);
+}
+
 function Assistant() {
 	const recorder = useAudioRecorder(RECORDING_OPTIONS);
 	const insets = useSafeAreaInsets();
 	const { width } = useWindowDimensions();
 	const [phase, setPhase] = useState<AssistantPhase>({ kind: "booting" });
 	const [mode, setMode] = useState<ModeId>("finance");
-	const [sessions, setSessions] = useState<Record<ModeId, Session>>({
-		finance: EMPTY_SESSION,
-		health: EMPTY_SESSION,
-	});
+	const [store, setStore] = useState<Store>(loadStore);
+	const [capture, setCapture] = useState<{
+		mode: ModeId;
+		entryId: string;
+		count: number;
+	} | null>(null);
+	const [freshId, setFreshId] = useState<string | null>(null);
 	const [recordingSeconds, setRecordingSeconds] = useState(0);
 	const [level, setLevel] = useState(0);
 	const [modelAttempt, setModelAttempt] = useState(0);
 	const [footerHeight, setFooterHeight] = useState(0);
 	const loadedModels = useRef<ModelIds>({ asr: null, llm: null });
+	const ledgersRef = useRef(store.ledgers);
 	const scrollRef = useRef<ScrollView>(null);
 	const pulse = useRef(new Animated.Value(1)).current;
 	const demoTurn = useRef<Record<ModeId, number>>({ finance: 0, health: 0 });
 	const scrollAnchor = useRef({ count: 0, mode });
-	const updateSession = useCallback(
-		(target: ModeId, change: (session: Session) => Session) => {
-			setSessions((current) => ({
-				...current,
-				[target]: change(current[target]),
-			}));
+	const commit = useCallback(
+		(target: ModeId, change: (ledger: Ledger) => Ledger) => {
+			const next = change(ledgersRef.current[target]);
+			// Not inside the setStore updater: StrictMode runs updaters twice and would double-write.
+			// Ahead of the ref and state writes so a failed save leaves neither holding a row the disk lacks.
+			saveLedger(next);
+			ledgersRef.current = { ...ledgersRef.current, [target]: next };
+			setStore((current) => ({ ...current, ledgers: ledgersRef.current }));
 		},
 		[],
 	);
 	const config = MODES[mode];
-	const { turns, spreadsheet } = sessions[mode];
-	const isBusy = phase.kind === "transcribing" || phase.kind === "converting";
+	const rows = ledgerRows(store.ledgers[mode], config.columns);
+	const ghostRows: LedgerRow[] = config.exampleRows.map((cells, index) => ({
+		entryId: "ejemplo",
+		index,
+		cells,
+	}));
+	const shownRows = rows.length ? rows : ghostRows;
+	const isBusy = phase.kind === "transcribing" || phase.kind === "ordering";
 	const isRecording = phase.kind === "recording";
 	const canRecord = phase.kind === "ready" || isRecording;
 	const modelsReady =
@@ -617,6 +808,13 @@ function Assistant() {
 		return () => clearInterval(interval);
 	}, [isRecording, recorder]);
 
+	useEffect(() => {
+		if (!capture) return;
+		setFreshId(capture.entryId);
+		const timeout = setTimeout(() => setFreshId(null), HIGHLIGHT_MS);
+		return () => clearTimeout(timeout);
+	}, [capture]);
+
 	const statusText = useMemo(() => {
 		switch (phase.kind) {
 			case "booting":
@@ -624,26 +822,26 @@ function Assistant() {
 			case "loading":
 				return `Descargando ${MODEL_LABELS[phase.model]}`;
 			case "ready":
-				return turns.length ? config.readySome : config.readyEmpty;
+				return rows.length ? config.readySome : config.readyEmpty;
 			case "recording":
 				return "Te escucho";
 			case "transcribing":
 				return "Pasando voz a texto";
-			case "converting":
-				return "Ordenando la conversación";
+			case "ordering":
+				return "Ordenando lo que dijiste";
 			case "error":
 				return phase.scope === "models"
 					? "No se pudieron cargar los modelos"
-					: "No se pudo guardar ese fragmento";
+					: "Algo salió mal con esa captura";
 		}
-	}, [config, phase, turns.length]);
+	}, [config, phase, rows.length]);
 
 	const statusCaption = useMemo(() => {
 		switch (phase.kind) {
 			case "loading":
 				return `Modelo ${phase.model === "asr" ? 1 : 2} de 2 · ${MODEL_SIZES[phase.model]} · descarga única, después funciona sin conexión`;
 			case "recording":
-				return "Pulsa de nuevo cuando termines este fragmento";
+				return "Pulsa de nuevo cuando termines de hablar";
 			case "error":
 				return phase.message;
 			default:
@@ -651,59 +849,93 @@ function Assistant() {
 		}
 	}, [phase]);
 
-	const appendTurn = useCallback(
-		(target: ModeId, content: string) => {
-			updateSession(target, (session) => ({
-				turns: [...session.turns, { id: makeId(), content }],
-				spreadsheet: null,
-			}));
-			setPhase({ kind: "ready" });
-		},
-		[updateSession],
-	);
+	const captureTranscript = async (owner: ModeId) => {
+		if (uiOnly) {
+			const { demoTurns } = MODES[owner];
+			const transcript = demoTurns[demoTurn.current[owner] % demoTurns.length];
+			demoTurn.current[owner] += 1;
+			return transcript;
+		}
+		await recorder.stop();
+		const uri = recorder.uri;
+		const asrModelId = loadedModels.current.asr;
+		if (!uri || !asrModelId)
+			throw new Error("No se encontró el audio grabado.");
+		const sdk = await getQvacSdk();
+		return (
+			await sdk.transcribe({
+				modelId: asrModelId,
+				audioChunk: toLocalPath(uri),
+			})
+		).trim();
+	};
 
-	const removeTurn = (id: string) => {
-		updateSession(mode, (session) => ({
-			turns: session.turns.filter((turn) => turn.id !== id),
-			spreadsheet: null,
-		}));
+	const orderEntry = async (owner: ModeId, transcript: string) => {
+		const target = MODES[owner];
+		if (uiOnly) {
+			const index = target.demoTurns.indexOf(transcript);
+			return index < 0 ? [] : [target.demoRows[index]];
+		}
+		const llmModelId = loadedModels.current.llm;
+		if (!llmModelId) return [];
+		try {
+			const sdk = await getQvacSdk();
+			const run = sdk.completion({
+				modelId: llmModelId,
+				history: [
+					{ role: "system", content: orderPrompt(target) },
+					{ role: "user", content: transcript },
+				],
+				stream: true,
+			});
+			let response = "";
+			for await (const event of run.events)
+				if (event.type === "contentDelta") response += event.text;
+			return parseRows(response, target.columns);
+		} catch {
+			return [];
+		}
 	};
 
 	const stopRecording = async () => {
 		const owner = mode;
 		setPhase({ kind: "transcribing", owner });
 		try {
-			if (uiOnly) {
-				const { demoTurns } = MODES[owner];
-				appendTurn(
-					owner,
-					demoTurns[demoTurn.current[owner] % demoTurns.length],
-				);
-				demoTurn.current[owner] += 1;
+			const transcript = await captureTranscript(owner);
+			if (!isMeaningfulTranscript(transcript)) {
+				setPhase({
+					kind: "error",
+					message:
+						"No se escuchó voz. Acerca el micrófono e inténtalo otra vez.",
+					scope: "capture",
+				});
 				return;
 			}
-			await recorder.stop();
-			const uri = recorder.uri;
-			const asrModelId = loadedModels.current.asr;
-			if (!uri || !asrModelId)
-				throw new Error("No se encontró el audio grabado.");
-			const sdk = await getQvacSdk();
-			const transcript = (
-				await sdk.transcribe({
-					modelId: asrModelId,
-					audioChunk: toLocalPath(uri),
-				})
-			).trim();
-			if (isMeaningfulTranscript(transcript)) {
-				appendTurn(owner, transcript);
-				return;
-			}
-			setPhase({
-				kind: "error",
-				message:
-					"No se escuchó voz en ese fragmento. Acerca el micrófono e inténtalo otra vez.",
-				scope: "capture",
+			const entry: LedgerEntry = {
+				id: makeId(),
+				at: Date.now(),
+				said: transcript,
+				rows: [],
+			};
+			commit(owner, (ledger) => appendEntry(ledger, entry));
+			setPhase({ kind: "ordering", owner });
+			const ordered = await orderEntry(owner, transcript);
+			setCapture({
+				mode: owner,
+				entryId: entry.id,
+				count: Math.max(ordered.length, 1),
 			});
+			if (!ordered.length) {
+				setPhase({
+					kind: "error",
+					message:
+						"Guardé tus palabras, pero no pude separarlas en columnas. La fila quedó tal como la dijiste.",
+					scope: "capture",
+				});
+				return;
+			}
+			commit(owner, (ledger) => setEntryRows(ledger, entry.id, ordered));
+			setPhase({ kind: "ready" });
 		} catch (error) {
 			setPhase({
 				kind: "error",
@@ -738,54 +970,18 @@ function Assistant() {
 		}
 	};
 
-	const generateSpreadsheet = async () => {
-		if (!turns.length) return;
-		const owner = mode;
-		const capturedTurns = turns;
-		const { demoSheet, fallbackTitle, prompt } = MODES[owner];
-		const writeSheet = (sheet: SpreadsheetData) => {
-			updateSession(owner, (session) => ({ ...session, spreadsheet: sheet }));
-			setPhase({ kind: "ready" });
-		};
-		setPhase({ kind: "converting", owner });
-		if (uiOnly) {
-			writeSheet(demoSheet(capturedTurns));
-			return;
-		}
-		const llmModelId = loadedModels.current.llm;
-		if (!llmModelId) {
-			writeSheet(fallbackSpreadsheet(capturedTurns, fallbackTitle));
-			return;
-		}
-		try {
-			const sdk = await getQvacSdk();
-			const transcript = capturedTurns
-				.map((turn, index) => `Fragmento ${index + 1}: ${turn.content}`)
-				.join("\n");
-			const run = sdk.completion({
-				modelId: llmModelId,
-				history: [
-					{ role: "system", content: prompt },
-					{ role: "user", content: transcript },
-				],
-				stream: true,
-			});
-			let response = "";
-			for await (const event of run.events)
-				if (event.type === "contentDelta") response += event.text;
-			writeSheet(parseSpreadsheet(response, capturedTurns, fallbackTitle));
-		} catch {
-			writeSheet(fallbackSpreadsheet(capturedTurns, fallbackTitle));
-		}
-	};
-
-	const resetSession = () => {
-		updateSession(mode, () => EMPTY_SESSION);
+	const undoCapture = () => {
+		if (!capture) return;
+		commit(capture.mode, (ledger) => removeEntry(ledger, capture.entryId));
+		setCapture(null);
+		setFreshId(null);
 		setPhase({ kind: "ready" });
 	};
 
 	const selectMode = (next: ModeId) => {
 		setMode(next);
+		setCapture(null);
+		setFreshId(null);
 		scrollRef.current?.scrollTo({ animated: false, y: 0 });
 	};
 
@@ -797,65 +993,66 @@ function Assistant() {
 		setModelAttempt((attempt) => attempt + 1);
 	};
 
-	const shareSpreadsheet = async () => {
-		if (!spreadsheet) return;
-		const csv = toCsv(spreadsheet);
-		const filename = `${slugify(spreadsheet.title)}.csv`;
+	const shareLedger = async () => {
+		if (!rows.length) return;
+		const csv = toCsv(
+			config.columns,
+			rows.map((row) => row.cells),
+		);
 		try {
 			if (!(await Sharing.isAvailableAsync())) throw new Error("unavailable");
-			const file = new File(Paths.cache, filename);
+			const file = new File(Paths.cache, config.csvName);
 			if (file.exists) file.delete();
 			file.create();
 			file.write(csv);
 			await Sharing.shareAsync(file.uri, {
-				dialogTitle: spreadsheet.title,
+				dialogTitle: config.ledgerTitle,
 				mimeType: "text/csv",
 				UTI: "public.comma-separated-values-text",
 			});
 		} catch {
-			await Share.share({ message: csv, title: filename }).catch(
+			await Share.share({ message: csv, title: config.csvName }).catch(
 				() => undefined,
 			);
 		}
 	};
 
-	const columnWidths = useMemo(() => {
-		if (!spreadsheet) return [];
-		const raw = spreadsheet.columns.map((column, index) => {
-			const longest = spreadsheet.rows.reduce(
-				(max, row) => Math.max(max, (row[index] ?? "").length),
-				column.length,
-			);
-			return Math.min(210, Math.max(58, longest * 7.1 + 26));
-		});
-		const total = raw.reduce((sum, value) => sum + value, 0);
-		const available = width - 42;
-		if (total >= available) return raw;
-		return raw.map((value) => value + (available - total) * (value / total));
-	}, [spreadsheet, width]);
-
-	const tableWidth = columnWidths.reduce((sum, value) => sum + value, 0);
-	const tableScrolls = tableWidth > width - 42;
+	const columnWidths = config.columns.map((column, index) => {
+		const longest = shownRows.reduce(
+			(max, row) => Math.max(max, (row.cells[index] ?? "").length),
+			column.length,
+		);
+		return Math.min(210, Math.max(58, longest * 7.1 + 26));
+	});
+	const rawWidth = columnWidths.reduce((sum, value) => sum + value, 0);
+	const available = width - 42;
+	const widths =
+		rawWidth >= available
+			? columnWidths
+			: columnWidths.map(
+					(value) => value + (available - rawWidth) * (value / rawWidth),
+				);
+	const tableWidth = widths.reduce((sum, value) => sum + value, 0);
+	const tableScrolls = tableWidth > available;
 
 	useEffect(() => {
 		const previous = scrollAnchor.current;
-		scrollAnchor.current = { count: turns.length, mode };
-		if (previous.mode !== mode || turns.length <= previous.count) return;
+		scrollAnchor.current = { count: rows.length, mode };
+		if (previous.mode !== mode || rows.length <= previous.count) return;
 		const timeout = setTimeout(
 			() => scrollRef.current?.scrollToEnd({ animated: true }),
 			80,
 		);
 		return () => clearTimeout(timeout);
-	}, [mode, turns.length]);
+	}, [mode, rows.length]);
 
 	const errored = phase.kind === "error";
 	const footerHint =
-		(phase.kind === "transcribing" || phase.kind === "converting") &&
-		phase.owner !== mode
+		isBusy && phase.owner !== mode
 			? `Terminando en ${MODES[phase.owner].tabLabel}`
 			: isBusy
 				? statusText
-				: turns.length
+				: rows.length
 					? config.footerHintSome
 					: config.footerHintEmpty;
 
@@ -950,153 +1147,101 @@ function Assistant() {
 					)}
 				</View>
 
-				<SectionHeading
-					badge={
-						<View style={styles.countBadge}>
-							<Text style={styles.countText}>{countLabel(turns.length)}</Text>
-						</View>
-					}
-					label="CAPTURA"
-					title={config.captureTitle}
-				/>
-
-				{turns.length === 0 ? (
-					<View style={styles.emptyState}>
-						<View style={styles.emptyIcon}>
-							<Text style={[styles.emptyGlyph, config.tint.fg]}>◌</Text>
-						</View>
-						<Text style={styles.emptyTitle}>{config.emptyTitle}</Text>
-						<Text style={styles.emptyCopy}>{config.emptyCopy}</Text>
-					</View>
-				) : (
-					<View style={styles.turnList}>
-						{turns.map((turn, index) => (
-							<View key={turn.id} style={styles.turnCard}>
-								<View style={styles.turnNumber}>
-									<Text style={[styles.turnNumberText, config.tint.fg]}>
-										{String(index + 1).padStart(2, "0")}
-									</Text>
-								</View>
-								<Text style={styles.turnText}>{turn.content}</Text>
-								<PressableBox
-									accessibilityLabel={`Borrar fragmento ${index + 1}`}
-									hitSlop={10}
-									onPress={() => removeTurn(turn.id)}
-									pressedStyle={styles.pressedSoft}
-									style={styles.turnDelete}
-								>
-									<Text style={styles.turnDeleteGlyph}>×</Text>
-								</PressableBox>
-							</View>
-						))}
+				{store.quarantined.length > 0 && (
+					<View style={styles.quarantineNotice}>
+						<Text style={styles.quarantineText}>
+							No pude leer lo que había guardado en{" "}
+							{store.quarantined.map((id) => MODES[id].tabLabel).join(" y ")}.
+							Aparté ese archivo sin borrarlo y ese modo empieza vacío.
+						</Text>
 					</View>
 				)}
 
-				{spreadsheet && (
-					<View style={styles.sheetSection}>
-						<SectionHeading
-							badge={
-								<View style={styles.csvBadge}>
-									<Text style={[styles.csvText, config.tint.fg]}>
-										CSV · {rowLabel(spreadsheet.rows.length)}
-									</Text>
-								</View>
-							}
-							label="RESULTADO"
-							title={spreadsheet.title}
-						/>
-
-						{spreadsheet.fallback && (
-							<View style={styles.fallbackNotice}>
-								<Text style={styles.fallbackText}>
-									El modelo no devolvió una tabla utilizable, así que aquí está
-									la conversación tal cual.
-								</Text>
-								<PressableBox
-									onPress={() => void generateSpreadsheet()}
-									pressedStyle={styles.pressedSoft}
-									style={styles.fallbackButton}
-								>
-									<Text style={styles.fallbackButtonText}>
-										Intentar organizar otra vez
-									</Text>
-								</PressableBox>
+				<SectionHeading
+					badge={
+						<View style={styles.headingActions}>
+							<View style={styles.countBadge}>
+								<Text style={styles.countText}>{rowLabel(rows.length)}</Text>
 							</View>
-						)}
-
-						<ScrollView
-							horizontal
-							showsHorizontalScrollIndicator={tableScrolls}
-						>
-							<View style={[styles.table, { width: tableWidth }]}>
-								<View style={[styles.tableRow, styles.tableHeader]}>
-									{spreadsheet.columns.map((column, index) => (
-										<Text
-											key={column}
-											style={[
-												styles.cell,
-												styles.headerCell,
-												config.tint.fg,
-												{ width: columnWidths[index] },
-											]}
-										>
-											{column}
-										</Text>
-									))}
-								</View>
-								{spreadsheet.rows.map((row, rowIndex) => {
-									const rowKey = `${rowIndex}-${row.join("")}`;
-									return (
-										<View
-											key={rowKey}
-											style={[
-												styles.tableRow,
-												rowIndex % 2 === 1 && styles.tableRowAlt,
-											]}
-										>
-											{row.map((cell, index) => (
-												<Text
-													key={`${rowKey}-${spreadsheet.columns[index]}`}
-													style={[styles.cell, { width: columnWidths[index] }]}
-												>
-													{cell}
-												</Text>
-											))}
-										</View>
-									);
-								})}
-							</View>
-						</ScrollView>
-
-						{tableScrolls && (
-							<Text style={styles.tableHint}>
-								Desliza la tabla para ver el resto de las columnas
-							</Text>
-						)}
-
-						<PressableBox
-							onPress={() => void shareSpreadsheet()}
-							pressedStyle={styles.pressedStrong}
-							style={[styles.shareButton, config.tint.bg]}
-						>
-							<Text style={[styles.shareIcon, config.tint.ink]}>↗</Text>
-							<Text style={[styles.shareText, config.tint.ink]}>
-								Compartir como CSV
-							</Text>
-						</PressableBox>
-						<PressableBox
-							disabled={isBusy}
-							onPress={resetSession}
-							pressedStyle={styles.pressedSoft}
-							style={styles.newSessionButton}
-						>
-							<Text
+							<PressableBox
+								accessibilityLabel="Compartir como CSV"
+								disabled={!rows.length}
+								hitSlop={8}
+								onPress={() => void shareLedger()}
+								pressedStyle={styles.pressedStrong}
 								style={[
-									styles.newSessionText,
-									isBusy && styles.newSessionTextDisabled,
+									styles.shareButton,
+									config.tint.bg,
+									!rows.length && styles.shareButtonDisabled,
 								]}
 							>
-								Nueva conversación
+								<Text
+									style={[
+										styles.shareIcon,
+										config.tint.ink,
+										!rows.length && styles.shareIconDisabled,
+									]}
+								>
+									↗
+								</Text>
+							</PressableBox>
+						</View>
+					}
+					label="CAPTURA"
+					title={config.ledgerTitle}
+				/>
+
+				{rows.length === 0 ? (
+					<View style={styles.emptyState}>
+						<Text style={styles.emptyTitle}>{config.emptyTitle}</Text>
+						<Text style={styles.emptyCopy}>{config.emptyCopy}</Text>
+						<ScrollView
+							horizontal
+							showsHorizontalScrollIndicator={false}
+							style={styles.emptyTable}
+						>
+							<LedgerTable
+								accent={config.tint}
+								columns={config.columns}
+								muted
+								rows={ghostRows}
+								widths={widths}
+							/>
+						</ScrollView>
+						<Text style={styles.emptyTag}>(ejemplo)</Text>
+					</View>
+				) : (
+					<ScrollView horizontal showsHorizontalScrollIndicator={tableScrolls}>
+						<LedgerTable
+							accent={config.tint}
+							columns={config.columns}
+							freshId={freshId}
+							rows={rows}
+							widths={widths}
+						/>
+					</ScrollView>
+				)}
+
+				{rows.length > 0 && tableScrolls && (
+					<Text style={styles.tableHint}>
+						Desliza la tabla para ver el resto de las columnas
+					</Text>
+				)}
+
+				{capture?.mode === mode && (
+					<View style={styles.toast}>
+						<Text style={styles.toastText}>
+							Agregué {rowLabel(capture.count)}.
+						</Text>
+						<PressableBox
+							accessibilityLabel="Deshacer la última captura"
+							hitSlop={8}
+							onPress={undoCapture}
+							pressedStyle={styles.pressedSoft}
+							style={styles.toastAction}
+						>
+							<Text style={[styles.toastActionText, config.tint.fg]}>
+								Deshacer
 							</Text>
 						</PressableBox>
 					</View>
@@ -1121,33 +1266,10 @@ function Assistant() {
 					<Text style={styles.footerHint}>{footerHint}</Text>
 				)}
 				<View style={styles.footerRow}>
-					<PressableBox
-						disabled={!turns.length || isBusy}
-						onPress={() => void generateSpreadsheet()}
-						pressedStyle={styles.pressedStrong}
-						style={[
-							styles.convertButton,
-							config.tint.bg,
-							(!turns.length || isBusy) && styles.convertButtonDisabled,
-						]}
-					>
-						{phase.kind === "converting" && (
-							<ActivityIndicator color={config.inkColor} size="small" />
-						)}
-						<Text
-							style={[
-								styles.convertText,
-								config.tint.ink,
-								(!turns.length || isBusy) && styles.convertTextDisabled,
-							]}
-						>
-							{spreadsheet ? "Actualizar hoja" : "Convertir en hoja"}
-						</Text>
-					</PressableBox>
 					<Animated.View style={{ transform: [{ scale: pulse }] }}>
 						<PressableBox
 							accessibilityLabel={
-								isRecording ? "Detener grabación" : "Grabar fragmento"
+								isRecording ? "Detener grabación" : "Grabar una fila"
 							}
 							disabled={!canRecord}
 							onPress={() =>
@@ -1311,6 +1433,15 @@ const styles = StyleSheet.create({
 		paddingVertical: 10,
 	},
 	retryText: { color: "#F0B37A", fontSize: 13, fontWeight: "700" },
+	quarantineNotice: {
+		backgroundColor: "#1B2419",
+		borderColor: "#3C4A2E",
+		borderRadius: 14,
+		borderWidth: 1,
+		marginTop: 12,
+		padding: 13,
+	},
+	quarantineText: { color: "#D9CB9C", fontSize: 12, lineHeight: 18 },
 	sectionHeading: {
 		alignItems: "center",
 		flexDirection: "row",
@@ -1332,6 +1463,12 @@ const styles = StyleSheet.create({
 		letterSpacing: -0.3,
 		marginTop: 3,
 	},
+	headingActions: {
+		alignItems: "center",
+		flexDirection: "row",
+		flexShrink: 0,
+		gap: 8,
+	},
 	countBadge: {
 		backgroundColor: "#18231B",
 		borderRadius: 12,
@@ -1340,30 +1477,36 @@ const styles = StyleSheet.create({
 		paddingVertical: 7,
 	},
 	countText: { color: "#9BB39C", fontSize: 11, fontWeight: "700" },
-	emptyState: {
+	shareButton: {
 		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 11,
+		height: 34,
+		justifyContent: "center",
+		width: 34,
+	},
+	shareButtonDisabled: { backgroundColor: "#232E25" },
+	shareIcon: {
+		color: "#122014",
+		fontSize: 17,
+		fontWeight: "800",
+		lineHeight: 20,
+	},
+	shareIconDisabled: { color: "#8A9C8C" },
+	emptyState: {
 		backgroundColor: "#111813",
 		borderColor: "#243226",
 		borderRadius: 20,
 		borderStyle: "dashed",
 		borderWidth: 1,
-		paddingHorizontal: 28,
-		paddingVertical: 30,
+		paddingHorizontal: 14,
+		paddingVertical: 20,
 	},
-	emptyIcon: {
-		alignItems: "center",
-		backgroundColor: "#1A2A1D",
-		borderRadius: 24,
-		height: 48,
-		justifyContent: "center",
-		width: 48,
-	},
-	emptyGlyph: { color: "#B8F56F", fontSize: 31, lineHeight: 34 },
 	emptyTitle: {
 		color: "#E8F3E5",
 		fontSize: 16,
 		fontWeight: "700",
-		marginTop: 13,
+		textAlign: "center",
 	},
 	emptyCopy: {
 		color: "#8FA792",
@@ -1372,62 +1515,15 @@ const styles = StyleSheet.create({
 		marginTop: 7,
 		textAlign: "center",
 	},
-	turnList: { gap: 9 },
-	turnCard: {
-		alignItems: "flex-start",
-		backgroundColor: "#18211B",
-		borderColor: "#243226",
-		borderRadius: 15,
-		borderWidth: 1,
-		flexDirection: "row",
-		padding: 13,
-	},
-	turnNumber: {
-		alignItems: "center",
-		backgroundColor: "#253B28",
-		borderRadius: 8,
-		height: 28,
-		justifyContent: "center",
-		marginRight: 11,
-		width: 28,
-	},
-	turnNumberText: { color: "#B8F56F", fontSize: 10, fontWeight: "800" },
-	turnText: { color: "#DCE9D9", flex: 1, fontSize: 14, lineHeight: 21 },
-	turnDelete: {
-		alignItems: "center",
-		height: 28,
-		justifyContent: "center",
-		marginLeft: 8,
-		width: 28,
-	},
-	turnDeleteGlyph: { color: "#8CA391", fontSize: 20, lineHeight: 22 },
-	sheetSection: { marginTop: 4 },
-	fallbackNotice: {
-		backgroundColor: "#1B2419",
-		borderColor: "#3C4A2E",
-		borderRadius: 14,
-		borderWidth: 1,
-		marginBottom: 12,
-		padding: 13,
-	},
-	fallbackText: { color: "#D9CB9C", fontSize: 12, lineHeight: 18 },
-	fallbackButton: {
-		alignSelf: "flex-start",
-		backgroundColor: "#2A3524",
-		borderRadius: 10,
+	emptyTable: { marginTop: 16 },
+	emptyTag: {
+		color: "#7E9483",
+		fontSize: 11,
+		fontWeight: "700",
+		letterSpacing: 0.6,
 		marginTop: 10,
-		paddingHorizontal: 14,
-		paddingVertical: 8,
+		textAlign: "center",
 	},
-	fallbackButtonText: { color: "#C5F99D", fontSize: 12, fontWeight: "700" },
-	csvBadge: {
-		backgroundColor: "#213625",
-		borderRadius: 12,
-		flexShrink: 0,
-		paddingHorizontal: 9,
-		paddingVertical: 7,
-	},
-	csvText: { color: "#B8F56F", fontSize: 10, fontWeight: "800" },
 	table: {
 		backgroundColor: "#121A15",
 		borderColor: "#2A3D2D",
@@ -1435,6 +1531,7 @@ const styles = StyleSheet.create({
 		borderWidth: 1,
 		overflow: "hidden",
 	},
+	tableMuted: { borderColor: "#2A3D2D", borderStyle: "dashed" },
 	tableRow: {
 		borderTopColor: "#26382A",
 		borderTopWidth: StyleSheet.hairlineWidth,
@@ -1449,6 +1546,8 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 12,
 		paddingVertical: 11,
 	},
+	cellMuted: { color: "#7E9483", fontStyle: "italic" },
+	freshTag: { fontSize: 10, fontWeight: "800", letterSpacing: 0.6 },
 	headerCell: { color: "#B8F56F", fontSize: 11, fontWeight: "800" },
 	tableHint: {
 		color: "#8CA391",
@@ -1456,25 +1555,21 @@ const styles = StyleSheet.create({
 		marginTop: 8,
 		textAlign: "center",
 	},
-	shareButton: {
+	toast: {
 		alignItems: "center",
-		backgroundColor: "#B8F56F",
-		borderRadius: 13,
+		backgroundColor: "#18231B",
+		borderColor: "#2A3D2D",
+		borderRadius: 14,
+		borderWidth: 1,
 		flexDirection: "row",
-		justifyContent: "center",
+		gap: 10,
 		marginTop: 14,
-		paddingVertical: 13,
+		paddingHorizontal: 13,
+		paddingVertical: 11,
 	},
-	shareIcon: {
-		color: "#122014",
-		fontSize: 18,
-		fontWeight: "800",
-		marginRight: 7,
-	},
-	shareText: { color: "#122014", fontSize: 14, fontWeight: "800" },
-	newSessionButton: { alignItems: "center", paddingVertical: 14 },
-	newSessionText: { color: "#9FB89F", fontSize: 13, fontWeight: "700" },
-	newSessionTextDisabled: { color: "#5C6F60" },
+	toastText: { color: "#C3D6C2", flex: 1, fontSize: 12, lineHeight: 17 },
+	toastAction: { flexShrink: 0, paddingHorizontal: 4, paddingVertical: 2 },
+	toastActionText: { color: "#B8F56F", fontSize: 13, fontWeight: "800" },
 	footer: {
 		backgroundColor: "#0D1210",
 		borderTopColor: "#1D2A20",
@@ -1507,21 +1602,11 @@ const styles = StyleSheet.create({
 	},
 	meter: { alignItems: "center", flexDirection: "row", gap: 3, height: 30 },
 	meterBar: { backgroundColor: "#F6B8A8", borderRadius: 2, width: 4 },
-	footerRow: { alignItems: "center", flexDirection: "row", gap: 12 },
-	convertButton: {
+	footerRow: {
 		alignItems: "center",
-		backgroundColor: "#B8F56F",
-		borderRadius: 14,
-		flex: 1,
 		flexDirection: "row",
-		gap: 7,
 		justifyContent: "center",
-		paddingHorizontal: 16,
-		paddingVertical: 16,
 	},
-	convertButtonDisabled: { backgroundColor: "#232E25" },
-	convertText: { color: "#122014", fontSize: 14, fontWeight: "800" },
-	convertTextDisabled: { color: "#8A9C8C" },
 	micButton: {
 		alignItems: "center",
 		backgroundColor: "#B8F56F",
