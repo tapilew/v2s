@@ -14,10 +14,10 @@ import {
 	ActivityIndicator,
 	Animated,
 	Easing,
-	FlatList,
 	Platform,
 	Pressable,
-	SafeAreaView,
+	ScrollView,
+	Share,
 	StyleSheet,
 	Text,
 	View,
@@ -25,35 +25,10 @@ import {
 
 type ModelProgressUpdate = { percentage: number };
 type QvacSdk = typeof import("@qvac/sdk");
-
-const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
-let qvacSdk: QvacSdk | null = null;
-
-const getQvacSdk = async (): Promise<QvacSdk> => {
-	if (qvacSdk) return qvacSdk;
-	qvacSdk = await import("@qvac/sdk");
-	return qvacSdk;
-};
-
-type MessageRole = "user" | "assistant";
-
-type ChatMessage = {
-	id: string;
-	role: MessageRole;
-	content: string;
-};
-
-type ConversationTurn = {
-	role: "system" | MessageRole;
-	content: string;
-};
-
 type ModelName = "asr" | "llm";
-
-type ModelIds = {
-	asr: string | null;
-	llm: string | null;
-};
+type ModelIds = { asr: string | null; llm: string | null };
+type CapturedTurn = { id: string; content: string };
+type SpreadsheetData = { title: string; columns: string[]; rows: string[][] };
 
 type AssistantPhase =
 	| { kind: "booting" }
@@ -61,20 +36,24 @@ type AssistantPhase =
 	| { kind: "ready" }
 	| { kind: "recording" }
 	| { kind: "transcribing" }
-	| { kind: "thinking" }
+	| { kind: "converting" }
 	| { kind: "error"; message: string };
 
-const SYSTEM_PROMPT =
-	"Eres una asistente de voz amable y concisa. Responde siempre en español. " +
-	"Usa una o dos frases cortas. No uses markdown, listas ni código porque tu respuesta se mostrará como una conversación hablada.";
+const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
+let qvacSdk: QvacSdk | null = null;
 
-const INITIAL_MESSAGES: ChatMessage[] = [
-	{
-		id: "welcome",
-		role: "assistant",
-		content: "Hola. Toca el micrófono y dime en qué puedo ayudarte.",
-	},
-];
+const getQvacSdk = async (): Promise<QvacSdk> => {
+	if (!qvacSdk) qvacSdk = await import("@qvac/sdk");
+	return qvacSdk;
+};
+
+const EXTRACTION_PROMPT =
+	"Eres una asistente que convierte conversaciones en datos de hoja de cálculo. " +
+	"Responde siempre con JSON válido, sin markdown ni texto adicional. " +
+	'Devuelve exactamente este formato: {"title": string, "columns": string[], "rows": string[][]}. ' +
+	"Elige columnas útiles según la conversación, por ejemplo Tarea, Responsable, Fecha, Estado y Notas. " +
+	'Cada fila debe tener el mismo número de celdas que columns. No inventes datos: usa "—" cuando falte información. ' +
+	"Si no hay tareas, organiza hechos, decisiones o pendientes en filas claras.";
 
 const RECORDING_OPTIONS: RecordingOptions = {
 	directory: "cache",
@@ -95,50 +74,97 @@ const RECORDING_OPTIONS: RecordingOptions = {
 		linearPCMIsBigEndian: false,
 		linearPCMIsFloat: false,
 	},
-	web: {
-		mimeType: "audio/mp4",
-		bitsPerSecond: 64000,
-	},
+	web: { mimeType: "audio/mp4", bitsPerSecond: 64000 },
 };
 
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
 const errorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Ocurrió un error inesperado.";
-
 const toLocalPath = (uri: string) =>
 	uri.startsWith("file://") ? uri.slice("file://".length) : uri;
-
 const isMeaningfulTranscript = (text: string) => {
 	const normalized = text.trim();
 	if (!normalized || /^\[[^\]]+\]$/.test(normalized)) return false;
 	return normalized.replace(/[^\p{L}\p{N}]/gu, "").length >= 3;
 };
 
-const modelLabel = (model: ModelName) =>
-	model === "asr" ? "voz" : "respuesta";
+const fallbackSpreadsheet = (turns: CapturedTurn[]): SpreadsheetData => ({
+	title: "Conversación sin clasificar",
+	columns: ["#", "Fragmento de conversación"],
+	rows: turns.map((turn, index) => [String(index + 1), turn.content]),
+});
+
+const normalizeSpreadsheet = (
+	value: unknown,
+	turns: CapturedTurn[],
+): SpreadsheetData => {
+	if (!value || typeof value !== "object") return fallbackSpreadsheet(turns);
+	const candidate = value as {
+		title?: unknown;
+		columns?: unknown;
+		rows?: unknown;
+	};
+	const columns = Array.isArray(candidate.columns)
+		? candidate.columns
+				.map(String)
+				.map((column) => column.trim())
+				.filter(Boolean)
+		: [];
+	if (!columns.length || !Array.isArray(candidate.rows))
+		return fallbackSpreadsheet(turns);
+	const rows = candidate.rows
+		.map((row) => {
+			if (Array.isArray(row)) return row.map((cell) => String(cell ?? "—"));
+			if (row && typeof row === "object") {
+				const record = row as Record<string, unknown>;
+				return columns.map((column) => String(record[column] ?? "—"));
+			}
+			return null;
+		})
+		.filter((row): row is string[] => row !== null)
+		.map((row) => columns.map((_, index) => (row[index] ?? "—").trim() || "—"));
+	return {
+		title:
+			typeof candidate.title === "string" && candidate.title.trim()
+				? candidate.title.trim()
+				: "Conversación organizada",
+		columns,
+		rows: rows.length ? rows : fallbackSpreadsheet(turns).rows,
+	};
+};
+
+const parseSpreadsheet = (response: string, turns: CapturedTurn[]) => {
+	const jsonCandidate = response.match(/\{[\s\S]*\}/)?.[0];
+	if (!jsonCandidate) return fallbackSpreadsheet(turns);
+	try {
+		return normalizeSpreadsheet(JSON.parse(jsonCandidate), turns);
+	} catch {
+		return fallbackSpreadsheet(turns);
+	}
+};
+
+const csvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
+const toCsv = (sheet: SpreadsheetData) =>
+	[sheet.columns, ...sheet.rows]
+		.map((row) => row.map(csvCell).join(","))
+		.join("\n");
 
 export default function App() {
 	const recorder = useAudioRecorder(RECORDING_OPTIONS);
 	const [phase, setPhase] = useState<AssistantPhase>({ kind: "booting" });
-	const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
+	const [turns, setTurns] = useState<CapturedTurn[]>([]);
+	const [spreadsheet, setSpreadsheet] = useState<SpreadsheetData | null>(null);
 	const [recordingSeconds, setRecordingSeconds] = useState(0);
 	const [modelAttempt, setModelAttempt] = useState(0);
 	const loadedModels = useRef<ModelIds>({ asr: null, llm: null });
-	const messagesRef = useRef<ChatMessage[]>(INITIAL_MESSAGES);
-	const historyRef = useRef<ConversationTurn[]>([
-		{ role: "system", content: SYSTEM_PROMPT },
-	]);
 	const pulse = useRef(new Animated.Value(1)).current;
+	const demoTurn = useRef(0);
+	const isBusy = phase.kind === "transcribing" || phase.kind === "converting";
+	const canRecord = phase.kind === "ready" || phase.kind === "recording";
 
-	const isBusy = phase.kind === "transcribing" || phase.kind === "thinking";
-	const canRecord =
-		!uiOnly && (phase.kind === "ready" || phase.kind === "recording");
-
-	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally reruns model initialization after recovery.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: modelAttempt intentionally retries initialization.
 	useEffect(() => {
 		let cancelled = false;
-
 		const progressFor =
 			(model: ModelName) => (progress: ModelProgressUpdate) => {
 				if (!cancelled) {
@@ -149,13 +175,11 @@ export default function App() {
 					});
 				}
 			};
-
 		const initializeModels = async () => {
 			if (uiOnly) {
 				setPhase({ kind: "ready" });
 				return;
 			}
-
 			setPhase({ kind: "loading", model: "asr", progress: 0 });
 			try {
 				const sdk = await getQvacSdk();
@@ -172,24 +196,18 @@ export default function App() {
 					},
 					onProgress: progressFor("asr"),
 				});
-
 				if (cancelled) {
 					await sdk.unloadModel({ modelId: asr });
 					return;
 				}
 				loadedModels.current.asr = asr;
-
 				setPhase({ kind: "loading", model: "llm", progress: 0 });
 				const llm = await sdk.loadModel({
 					modelSrc: sdk.LLAMA_3_2_1B_INST_Q4_0,
 					modelType: "llm",
-					modelConfig: {
-						device: "gpu",
-						ctx_size: 2048,
-					},
+					modelConfig: { device: "gpu", ctx_size: 4096 },
 					onProgress: progressFor("llm"),
 				});
-
 				if (cancelled) {
 					await sdk.unloadModel({ modelId: llm });
 					return;
@@ -197,14 +215,11 @@ export default function App() {
 				loadedModels.current.llm = llm;
 				setPhase({ kind: "ready" });
 			} catch (error) {
-				if (!cancelled) {
+				if (!cancelled)
 					setPhase({ kind: "error", message: errorMessage(error) });
-				}
 			}
 		};
-
 		void initializeModels();
-
 		return () => {
 			cancelled = true;
 			if (!qvacSdk) return;
@@ -227,7 +242,6 @@ export default function App() {
 			pulse.setValue(1);
 			return;
 		}
-
 		const animation = Animated.loop(
 			Animated.sequence([
 				Animated.timing(pulse, {
@@ -250,103 +264,57 @@ export default function App() {
 
 	useEffect(() => {
 		if (phase.kind !== "recording") return;
-		const interval = setInterval(() => {
-			setRecordingSeconds((seconds) => seconds + 1);
-		}, 1000);
+		const interval = setInterval(
+			() => setRecordingSeconds((seconds) => seconds + 1),
+			1000,
+		);
 		return () => clearInterval(interval);
 	}, [phase.kind]);
 
 	const statusText = useMemo(() => {
 		switch (phase.kind) {
 			case "booting":
-				return "Preparando modelos locales";
+				return "Preparando tu espacio";
 			case "loading":
-				return `Cargando modelo de ${modelLabel(phase.model)}`;
+				return `Cargando modelo de ${phase.model === "asr" ? "voz" : "hoja"}`;
 			case "ready":
-				return "Listo para escuchar";
+				return turns.length
+					? "Sigue agregando o crea tu hoja"
+					: "Listo para escuchar";
 			case "recording":
 				return "Te escucho";
 			case "transcribing":
-				return "Entendiendo tu mensaje";
-			case "thinking":
-				return "Preparando una respuesta";
+				return "Pasando voz a texto";
+			case "converting":
+				return "Ordenando la conversación";
 			case "error":
-				return "No se pudo iniciar";
+				return "No se pudo continuar";
 		}
-	}, [phase]);
+	}, [phase, turns.length]);
 
-	const updateAssistantMessage = (id: string, content: string) => {
-		const nextMessages = messagesRef.current.map((message) =>
-			message.id === id ? { ...message, content } : message,
-		);
-		messagesRef.current = nextMessages;
-		setMessages(nextMessages);
-	};
-
-	const generateResponse = async (transcript: string) => {
-		const llmModelId = loadedModels.current.llm;
-		if (!llmModelId) return;
-
-		const userMessage: ChatMessage = {
-			id: makeId(),
-			role: "user",
-			content: transcript,
-		};
-		const assistantId = makeId();
-		const assistantMessage: ChatMessage = {
-			id: assistantId,
-			role: "assistant",
-			content: "",
-		};
-		historyRef.current = [
-			...historyRef.current,
-			{ role: "user", content: transcript },
-		];
-		messagesRef.current = [
-			...messagesRef.current,
-			userMessage,
-			assistantMessage,
-		];
-		setMessages(messagesRef.current);
-		setPhase({ kind: "thinking" });
-
-		try {
-			const sdk = await getQvacSdk();
-			const run = sdk.completion({
-				modelId: llmModelId,
-				history: historyRef.current,
-				stream: true,
-			});
-			let response = "";
-			for await (const event of run.events) {
-				if (event.type === "contentDelta") {
-					response += event.text;
-					updateAssistantMessage(assistantId, response);
-				}
-			}
-			historyRef.current = [
-				...historyRef.current,
-				{ role: "assistant", content: response.trim() },
-			];
-			setPhase({ kind: "ready" });
-		} catch (error) {
-			updateAssistantMessage(
-				assistantId,
-				`No pude responder. ${errorMessage(error)}`,
-			);
-			setPhase({ kind: "ready" });
-		}
+	const appendTurn = (content: string) => {
+		setTurns((current) => [...current, { id: makeId(), content }]);
+		setSpreadsheet(null);
+		setPhase({ kind: "ready" });
 	};
 
 	const stopRecording = async () => {
 		setPhase({ kind: "transcribing" });
 		try {
+			if (uiOnly) {
+				const demoTurns = [
+					"Revisar el presupuesto de marketing el viernes y confirmar los cambios con Ana.",
+					"Deja la campaña de mayo como pendiente y asigna el diseño a Marcos.",
+				];
+				appendTurn(demoTurns[demoTurn.current % demoTurns.length]);
+				demoTurn.current += 1;
+				return;
+			}
 			await recorder.stop();
 			const uri = recorder.uri;
 			const asrModelId = loadedModels.current.asr;
 			if (!uri || !asrModelId)
 				throw new Error("No se encontró el audio grabado.");
-
 			const sdk = await getQvacSdk();
 			const transcript = (
 				await sdk.transcribe({
@@ -354,11 +322,8 @@ export default function App() {
 					audioChunk: toLocalPath(uri),
 				})
 			).trim();
-			if (!isMeaningfulTranscript(transcript)) {
-				setPhase({ kind: "ready" });
-				return;
-			}
-			await generateResponse(transcript);
+			if (isMeaningfulTranscript(transcript)) appendTurn(transcript);
+			else setPhase({ kind: "ready" });
 		} catch (error) {
 			setPhase({ kind: "error", message: errorMessage(error) });
 		}
@@ -367,16 +332,17 @@ export default function App() {
 	const startRecording = async () => {
 		if (phase.kind !== "ready") return;
 		try {
-			const permission = await requestRecordingPermissionsAsync();
-			if (!permission.granted) {
-				throw new Error("Necesito permiso para usar el micrófono.");
+			if (!uiOnly) {
+				const permission = await requestRecordingPermissionsAsync();
+				if (!permission.granted)
+					throw new Error("Necesito permiso para usar el micrófono.");
+				await setAudioModeAsync({
+					allowsRecording: true,
+					playsInSilentMode: true,
+				});
+				await recorder.prepareToRecordAsync();
+				recorder.record();
 			}
-			await setAudioModeAsync({
-				allowsRecording: true,
-				playsInSilentMode: true,
-			});
-			await recorder.prepareToRecordAsync();
-			recorder.record();
 			setRecordingSeconds(0);
 			setPhase({ kind: "recording" });
 		} catch (error) {
@@ -384,54 +350,86 @@ export default function App() {
 		}
 	};
 
-	const handleRecordPress = () => {
-		if (phase.kind === "recording") {
-			void stopRecording();
-		} else {
-			void startRecording();
+	const generateSpreadsheet = async () => {
+		if (!turns.length) return;
+		const capturedTurns = turns;
+		setPhase({ kind: "converting" });
+		if (uiOnly) {
+			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
+			setPhase({ kind: "ready" });
+			return;
+		}
+		const llmModelId = loadedModels.current.llm;
+		if (!llmModelId) {
+			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
+			setPhase({ kind: "ready" });
+			return;
+		}
+		try {
+			const sdk = await getQvacSdk();
+			const transcript = capturedTurns
+				.map((turn, index) => `Fragmento ${index + 1}: ${turn.content}`)
+				.join("\n");
+			const run = sdk.completion({
+				modelId: llmModelId,
+				history: [
+					{ role: "system", content: EXTRACTION_PROMPT },
+					{ role: "user", content: transcript },
+				],
+				stream: true,
+			});
+			let response = "";
+			for await (const event of run.events)
+				if (event.type === "contentDelta") response += event.text;
+			setSpreadsheet(parseSpreadsheet(response, capturedTurns));
+			setPhase({ kind: "ready" });
+		} catch {
+			setSpreadsheet(fallbackSpreadsheet(capturedTurns));
+			setPhase({ kind: "ready" });
 		}
 	};
 
-	const renderMessage = ({ item }: { item: ChatMessage }) => (
-		<View
-			style={[
-				styles.message,
-				item.role === "user" ? styles.userMessage : styles.assistantMessage,
-			]}
-		>
-			{item.role === "assistant" && (
-				<Text style={styles.messageLabel}>QVAC</Text>
-			)}
-			<Text
-				style={[
-					styles.messageText,
-					item.role === "user" && styles.userMessageText,
-				]}
-			>
-				{item.content || "..."}
-			</Text>
-		</View>
-	);
+	const resetSession = () => {
+		setTurns([]);
+		setSpreadsheet(null);
+		setPhase({ kind: "ready" });
+	};
+
+	const shareSpreadsheet = async () => {
+		if (spreadsheet)
+			await Share.share({
+				title: `${spreadsheet.title}.csv`,
+				message: toCsv(spreadsheet),
+			});
+	};
 
 	return (
-		<SafeAreaView style={styles.safeArea}>
+		<View style={styles.safeArea}>
 			<StatusBar style="light" />
-			<View style={styles.container}>
+			<ScrollView
+				contentContainerStyle={styles.container}
+				showsVerticalScrollIndicator={false}
+			>
 				<View style={styles.header}>
-					<View>
-						<Text style={styles.eyebrow}>ASISTENTE LOCAL</Text>
-						<Text style={styles.title}>Hola, soy QVAC</Text>
+					<View style={styles.brandLockup}>
+						<View style={styles.logoMark}>
+							<Text style={styles.logoWave}>∿</Text>
+						</View>
+						<View>
+							<Text style={styles.eyebrow}>V2S / VOICE TO SPREADSHEET</Text>
+							<Text style={styles.title}>Habla. Se ordena.</Text>
+						</View>
 					</View>
 					<View style={styles.localBadge}>
 						<View style={styles.localDot} />
-						<Text style={styles.localText}>En el teléfono</Text>
+						<Text style={styles.localText}>Local</Text>
 					</View>
 				</View>
 
 				<View style={styles.statusCard}>
 					<View style={styles.statusIcon}>
 						{phase.kind === "loading" || isBusy ? (
-							<ActivityIndicator color="#A8F26B" size="small" />
+							<ActivityIndicator color="#B8F56F" size="small" />
 						) : (
 							<View style={styles.statusDot} />
 						)}
@@ -441,7 +439,9 @@ export default function App() {
 						<Text style={styles.statusCaption}>
 							{phase.kind === "loading"
 								? `${phase.progress}% · Descarga única, luego funciona sin conexión`
-								: "Whisper + Llama corren de forma privada en Android"}
+								: phase.kind === "recording"
+									? "Pulsa de nuevo cuando termines este fragmento"
+									: "Tu audio y tus datos se quedan en este dispositivo"}
 						</Text>
 					</View>
 					{phase.kind === "loading" && (
@@ -453,44 +453,140 @@ export default function App() {
 					)}
 				</View>
 
-				<FlatList
-					data={messages}
-					keyExtractor={(item) => item.id}
-					renderItem={renderMessage}
-					contentContainerStyle={styles.messageList}
-					style={styles.messageListContainer}
-					showsVerticalScrollIndicator={false}
-				/>
+				<View style={styles.sectionHeading}>
+					<View>
+						<Text style={styles.sectionLabel}>CAPTURA</Text>
+						<Text style={styles.sectionTitle}>Conversación</Text>
+					</View>
+					<View style={styles.countBadge}>
+						<Text style={styles.countText}>{turns.length} fragmentos</Text>
+					</View>
+				</View>
 
-				<View style={styles.controls}>
-					<Text style={styles.helperText}>
-						{phase.kind === "recording"
-							? `Grabando · 00:${String(recordingSeconds).padStart(2, "0")}`
-							: "Toca para hablar en español"}
-					</Text>
-					<Animated.View style={{ transform: [{ scale: pulse }] }}>
+				{turns.length === 0 ? (
+					<View style={styles.emptyState}>
+						<View style={styles.emptyIcon}>
+							<Text style={styles.emptyGlyph}>◌</Text>
+						</View>
+						<Text style={styles.emptyTitle}>Tu hoja empieza aquí</Text>
+						<Text style={styles.emptyCopy}>
+							Graba una conversación por partes. Cada fragmento quedará listo
+							para organizarlo en filas.
+						</Text>
+					</View>
+				) : (
+					<View style={styles.turnList}>
+						{turns.map((turn, index) => (
+							<View key={turn.id} style={styles.turnCard}>
+								<View style={styles.turnNumber}>
+									<Text style={styles.turnNumberText}>
+										{String(index + 1).padStart(2, "0")}
+									</Text>
+								</View>
+								<Text style={styles.turnText}>{turn.content}</Text>
+							</View>
+						))}
+					</View>
+				)}
+
+				{spreadsheet ? (
+					<View style={styles.sheetSection}>
+						<View style={styles.sectionHeading}>
+							<View>
+								<Text style={styles.sectionLabel}>RESULTADO</Text>
+								<Text style={styles.sectionTitle}>{spreadsheet.title}</Text>
+							</View>
+							<View style={styles.csvBadge}>
+								<Text style={styles.csvText}>
+									CSV · {spreadsheet.rows.length} filas
+								</Text>
+							</View>
+						</View>
+						<ScrollView horizontal showsHorizontalScrollIndicator={false}>
+							<View style={styles.table}>
+								<View style={[styles.tableRow, styles.tableHeader]}>
+									{spreadsheet.columns.map((column) => (
+										<Text key={column} style={[styles.cell, styles.headerCell]}>
+											{column}
+										</Text>
+									))}
+								</View>
+								{spreadsheet.rows.map((row) => {
+									const rowKey = row.join("\u0001");
+									return (
+										<View key={rowKey} style={styles.tableRow}>
+											{row.map((cell) => (
+												<Text key={`${rowKey}-${cell}`} style={styles.cell}>
+													{cell}
+												</Text>
+											))}
+										</View>
+									);
+								})}
+							</View>
+						</ScrollView>
 						<Pressable
-							accessibilityLabel={
-								phase.kind === "recording" ? "Detener grabación" : "Hablar"
-							}
-							disabled={!canRecord}
-							onPress={handleRecordPress}
+							onPress={() => void shareSpreadsheet()}
+							style={styles.shareButton}
+						>
+							<Text style={styles.shareIcon}>↗</Text>
+							<Text style={styles.shareText}>Compartir como CSV</Text>
+						</Pressable>
+						<Pressable onPress={resetSession} style={styles.newSessionButton}>
+							<Text style={styles.newSessionText}>Nueva conversación</Text>
+						</Pressable>
+					</View>
+				) : (
+					<View style={styles.controls}>
+						<Text style={styles.helperText}>
+							{phase.kind === "recording"
+								? `Grabando · 00:${String(recordingSeconds).padStart(2, "0")}`
+								: "Toca para añadir un fragmento"}
+						</Text>
+						<Animated.View style={{ transform: [{ scale: pulse }] }}>
+							<Pressable
+								accessibilityLabel={
+									phase.kind === "recording"
+										? "Detener grabación"
+										: "Grabar fragmento"
+								}
+								disabled={!canRecord}
+								onPress={() =>
+									phase.kind === "recording"
+										? void stopRecording()
+										: void startRecording()
+								}
+								style={({ pressed }) => [
+									styles.micButton,
+									phase.kind === "recording" && styles.micButtonRecording,
+									!canRecord && styles.micButtonDisabled,
+									pressed && styles.micButtonPressed,
+								]}
+							>
+								<Text style={styles.micGlyph}>
+									{phase.kind === "recording" ? "■" : "●"}
+								</Text>
+							</Pressable>
+						</Animated.View>
+						<Text style={styles.privacyText}>
+							Procesamiento privado · sin nube
+						</Text>
+						<Pressable
+							disabled={!turns.length || isBusy}
+							onPress={() => void generateSpreadsheet()}
 							style={({ pressed }) => [
-								styles.micButton,
-								phase.kind === "recording" && styles.micButtonRecording,
-								!canRecord && styles.micButtonDisabled,
-								pressed && styles.micButtonPressed,
+								styles.convertButton,
+								(!turns.length || isBusy) && styles.convertButtonDisabled,
+								pressed && styles.convertButtonPressed,
 							]}
 						>
-							<Text style={styles.micGlyph}>
-								{phase.kind === "recording" ? "■" : "●"}
-							</Text>
+							{phase.kind === "converting" && (
+								<ActivityIndicator color="#122014" size="small" />
+							)}
+							<Text style={styles.convertText}>Convertir en hoja</Text>
 						</Pressable>
-					</Animated.View>
-					<Text style={styles.privacyText}>
-						Audio y modelos no salen del dispositivo.
-					</Text>
-				</View>
+					</View>
+				)}
 
 				{phase.kind === "error" && (
 					<View style={styles.errorPanel}>
@@ -503,62 +599,78 @@ export default function App() {
 						</Pressable>
 					</View>
 				)}
-			</View>
-		</SafeAreaView>
+			</ScrollView>
+		</View>
 	);
 }
 
 const styles = StyleSheet.create({
 	safeArea: { flex: 1, backgroundColor: "#0B0F0E" },
 	container: {
-		flex: 1,
 		paddingHorizontal: 20,
 		paddingTop: Platform.OS === "android" ? 18 : 8,
+		paddingBottom: 34,
 	},
 	header: {
-		flexDirection: "row",
 		alignItems: "center",
+		flexDirection: "row",
 		justifyContent: "space-between",
 		paddingBottom: 20,
 	},
+	brandLockup: { alignItems: "center", flex: 1, flexDirection: "row" },
+	logoMark: {
+		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 13,
+		height: 36,
+		justifyContent: "center",
+		marginRight: 10,
+		width: 36,
+	},
+	logoWave: {
+		color: "#122014",
+		fontSize: 29,
+		fontWeight: "800",
+		lineHeight: 31,
+	},
 	eyebrow: {
-		color: "#A8F26B",
-		fontSize: 11,
-		fontWeight: "700",
-		letterSpacing: 1.8,
+		color: "#B8F56F",
+		fontSize: 10,
+		fontWeight: "800",
+		letterSpacing: 1.4,
 	},
 	title: {
 		color: "#F1F7EE",
-		fontSize: 30,
+		fontSize: 29,
 		fontWeight: "700",
-		letterSpacing: -0.7,
-		marginTop: 5,
+		letterSpacing: -0.8,
+		marginTop: 4,
 	},
 	localBadge: {
-		flexDirection: "row",
 		alignItems: "center",
-		gap: 6,
 		backgroundColor: "#162018",
-		borderColor: "#273C2A",
+		borderColor: "#2C452F",
 		borderRadius: 20,
 		borderWidth: 1,
-		paddingHorizontal: 10,
+		flexDirection: "row",
+		paddingHorizontal: 9,
 		paddingVertical: 7,
 	},
 	localDot: {
-		backgroundColor: "#A8F26B",
+		backgroundColor: "#B8F56F",
 		borderRadius: 4,
 		height: 7,
+		marginRight: 6,
 		width: 7,
 	},
-	localText: { color: "#BED4BD", fontSize: 11, fontWeight: "600" },
+	localText: { color: "#BED4BD", fontSize: 11, fontWeight: "700" },
 	statusCard: {
+		alignItems: "center",
 		backgroundColor: "#121A15",
 		borderColor: "#243226",
 		borderRadius: 18,
 		borderWidth: 1,
 		flexDirection: "row",
-		alignItems: "center",
 		minHeight: 76,
 		padding: 14,
 	},
@@ -571,7 +683,7 @@ const styles = StyleSheet.create({
 		width: 40,
 	},
 	statusDot: {
-		backgroundColor: "#A8F26B",
+		backgroundColor: "#B8F56F",
 		borderRadius: 5,
 		height: 10,
 		width: 10,
@@ -592,55 +704,103 @@ const styles = StyleSheet.create({
 		overflow: "hidden",
 		width: 42,
 	},
-	progressFill: { backgroundColor: "#A8F26B", borderRadius: 2, height: "100%" },
-	messageListContainer: { flex: 1, marginHorizontal: -4 },
-	messageList: {
-		gap: 14,
-		paddingBottom: 20,
-		paddingHorizontal: 4,
-		paddingTop: 22,
+	progressFill: { backgroundColor: "#B8F56F", borderRadius: 2, height: "100%" },
+	sectionHeading: {
+		alignItems: "center",
+		flexDirection: "row",
+		justifyContent: "space-between",
+		marginBottom: 12,
+		marginTop: 27,
 	},
-	message: {
-		borderRadius: 18,
-		maxWidth: "88%",
-		paddingHorizontal: 16,
-		paddingVertical: 13,
-	},
-	assistantMessage: {
-		alignSelf: "flex-start",
-		backgroundColor: "#18211B",
-		borderBottomLeftRadius: 5,
-	},
-	userMessage: {
-		alignSelf: "flex-end",
-		backgroundColor: "#C5F99D",
-		borderBottomRightRadius: 5,
-	},
-	messageLabel: {
-		color: "#A8F26B",
+	sectionLabel: {
+		color: "#748A79",
 		fontSize: 10,
 		fontWeight: "800",
-		letterSpacing: 1.2,
-		marginBottom: 6,
+		letterSpacing: 1.5,
 	},
-	messageText: { color: "#EDF5EA", fontSize: 16, lineHeight: 24 },
-	userMessageText: { color: "#102015" },
+	sectionTitle: {
+		color: "#F1F7EE",
+		fontSize: 21,
+		fontWeight: "700",
+		letterSpacing: -0.3,
+		marginTop: 3,
+	},
+	countBadge: {
+		backgroundColor: "#18231B",
+		borderRadius: 12,
+		paddingHorizontal: 10,
+		paddingVertical: 7,
+	},
+	countText: { color: "#9BB39C", fontSize: 11, fontWeight: "700" },
+	emptyState: {
+		alignItems: "center",
+		backgroundColor: "#111813",
+		borderColor: "#243226",
+		borderRadius: 20,
+		borderStyle: "dashed",
+		borderWidth: 1,
+		paddingHorizontal: 28,
+		paddingVertical: 30,
+	},
+	emptyIcon: {
+		alignItems: "center",
+		backgroundColor: "#1A2A1D",
+		borderRadius: 24,
+		height: 48,
+		justifyContent: "center",
+		width: 48,
+	},
+	emptyGlyph: { color: "#B8F56F", fontSize: 31, lineHeight: 34 },
+	emptyTitle: {
+		color: "#E8F3E5",
+		fontSize: 16,
+		fontWeight: "700",
+		marginTop: 13,
+	},
+	emptyCopy: {
+		color: "#7F9682",
+		fontSize: 13,
+		lineHeight: 19,
+		marginTop: 7,
+		textAlign: "center",
+	},
+	turnList: { gap: 9 },
+	turnCard: {
+		alignItems: "flex-start",
+		backgroundColor: "#18211B",
+		borderColor: "#243226",
+		borderRadius: 15,
+		borderWidth: 1,
+		flexDirection: "row",
+		padding: 13,
+	},
+	turnNumber: {
+		alignItems: "center",
+		backgroundColor: "#253B28",
+		borderRadius: 8,
+		height: 28,
+		justifyContent: "center",
+		marginRight: 11,
+		width: 28,
+	},
+	turnNumberText: { color: "#B8F56F", fontSize: 10, fontWeight: "800" },
+	turnText: { color: "#DCE9D9", flex: 1, fontSize: 14, lineHeight: 21 },
 	controls: {
 		alignItems: "center",
 		borderTopColor: "#1D2A20",
 		borderTopWidth: StyleSheet.hairlineWidth,
-		paddingBottom: 10,
+		marginTop: 22,
 		paddingTop: 16,
 	},
 	helperText: { color: "#97AA9A", fontSize: 13, marginBottom: 12 },
 	micButton: {
 		alignItems: "center",
-		backgroundColor: "#A8F26B",
+		backgroundColor: "#B8F56F",
 		borderRadius: 38,
 		elevation: 6,
 		height: 76,
 		justifyContent: "center",
-		shadowColor: "#A8F26B",
+		shadowColor: "#B8F56F",
 		shadowOffset: { height: 6, width: 0 },
 		shadowOpacity: 0.2,
 		shadowRadius: 14,
@@ -656,7 +816,80 @@ const styles = StyleSheet.create({
 	micButtonPressed: { opacity: 0.82 },
 	micGlyph: { color: "#102015", fontSize: 24, fontWeight: "800" },
 	privacyText: { color: "#607264", fontSize: 11, marginTop: 12 },
-	errorPanel: { alignItems: "center", paddingBottom: 14, paddingTop: 6 },
+	convertButton: {
+		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 13,
+		flexDirection: "row",
+		justifyContent: "center",
+		marginTop: 18,
+		paddingHorizontal: 20,
+		paddingVertical: 13,
+		width: "100%",
+	},
+	convertButtonDisabled: { backgroundColor: "#263328" },
+	convertButtonPressed: { opacity: 0.82 },
+	convertText: {
+		color: "#122014",
+		fontSize: 14,
+		fontWeight: "800",
+		marginLeft: 7,
+	},
+	sheetSection: {
+		borderTopColor: "#1D2A20",
+		borderTopWidth: StyleSheet.hairlineWidth,
+		marginTop: 25,
+		paddingTop: 2,
+	},
+	csvBadge: {
+		backgroundColor: "#213625",
+		borderRadius: 12,
+		paddingHorizontal: 9,
+		paddingVertical: 7,
+	},
+	csvText: { color: "#B8F56F", fontSize: 10, fontWeight: "800" },
+	table: {
+		backgroundColor: "#121A15",
+		borderColor: "#2A3D2D",
+		borderRadius: 14,
+		borderWidth: 1,
+		minWidth: 520,
+		overflow: "hidden",
+	},
+	tableRow: {
+		borderTopColor: "#26382A",
+		borderTopWidth: StyleSheet.hairlineWidth,
+		flexDirection: "row",
+	},
+	tableHeader: { backgroundColor: "#1D3020", borderTopWidth: 0 },
+	cell: {
+		color: "#CFE0CE",
+		fontSize: 12,
+		lineHeight: 17,
+		paddingHorizontal: 12,
+		paddingVertical: 11,
+		width: 150,
+	},
+	headerCell: { color: "#B8F56F", fontSize: 11, fontWeight: "800" },
+	shareButton: {
+		alignItems: "center",
+		backgroundColor: "#B8F56F",
+		borderRadius: 13,
+		flexDirection: "row",
+		justifyContent: "center",
+		marginTop: 14,
+		paddingVertical: 13,
+	},
+	shareIcon: {
+		color: "#122014",
+		fontSize: 18,
+		fontWeight: "800",
+		marginRight: 7,
+	},
+	shareText: { color: "#122014", fontSize: 14, fontWeight: "800" },
+	newSessionButton: { alignItems: "center", paddingVertical: 14 },
+	newSessionText: { color: "#9FB89F", fontSize: 13, fontWeight: "700" },
+	errorPanel: { alignItems: "center", paddingBottom: 14, paddingTop: 12 },
 	errorText: {
 		color: "#F6B8A8",
 		fontSize: 12,
