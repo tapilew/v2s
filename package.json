@@ -1,0 +1,41 @@
+{
+	"name": "qvac-demo",
+	"version": "1.0.0",
+	"main": "index.ts",
+	"dependencies": {
+		"@qvac/sdk": "^0.19.0",
+		"expo": "~57.0.21",
+		"expo-audio": "^57.0.4",
+		"expo-build-properties": "~57.0.17",
+		"expo-device": "~57.0.1",
+		"expo-file-system": "~57.0.6",
+		"expo-status-bar": "~57.0.1",
+		"nativewind": "^4.2.6",
+		"react": "19.2.3",
+		"react-native": "0.86.3",
+		"react-native-bare-kit": "^0.15.0",
+		"react-native-reanimated": "4.5.1",
+		"react-native-safe-area-context": "~5.7.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.12",
+		"@types/react": "~19.2.2",
+		"babel-preset-expo": "~57.0.0",
+		"bare-pack": "^2.2.2",
+		"bun-types": "^1.4.2",
+		"tailwindcss": "^3.4.17",
+		"typescript": "~6.0.3"
+	},
+	"scripts": {
+		"start": "expo start",
+		"android": "bun scripts/launch-android.ts",
+		"android:direct": "expo start --android",
+		"ios": "expo start --ios",
+		"web": "expo start --web",
+		"check": "biome check .",
+		"format": "biome format --write .",
+		"lint": "biome lint .",
+		"verify": "bun scripts/verify-android.ts"
+	},
+	"private": true
+}

@@ -1,0 +1,45 @@
+{
+	"expo": {
+		"name": "QVAC Demo",
+		"slug": "qvac-demo",
+		"version": "1.0.0",
+		"orientation": "portrait",
+		"icon": "./assets/icon.png",
+		"userInterfaceStyle": "light",
+		"ios": {
+			"supportsTablet": true
+		},
+		"android": {
+			"permissions": [
+				"android.permission.RECORD_AUDIO",
+				"android.permission.MODIFY_AUDIO_SETTINGS",
+				"android.permission.FOREGROUND_SERVICE",
+				"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+			],
+			"adaptiveIcon": {
+				"backgroundColor": "#E6F4FE",
+				"foregroundImage": "./assets/android-icon-foreground.png",
+				"backgroundImage": "./assets/android-icon-background.png",
+				"monochromeImage": "./assets/android-icon-monochrome.png"
+			},
+			"predictiveBackGestureEnabled": false,
+			"package": "com.anonymous.qvacdemo"
+		},
+		"web": {
+			"bundler": "metro",
+			"favicon": "./assets/favicon.png"
+		},
+		"plugins": [
+			[
+				"expo-build-properties",
+				{
+					"android": {
+						"minSdkVersion": 29
+					}
+				}
+			],
+			"@qvac/sdk/expo-plugin",
+			"expo-audio"
+		]
+	}
+}
