@@ -52,9 +52,9 @@ for (const [label, path] of [
 }
 
 const wrapperRoot = `${process.env.TMPDIR || "/tmp"}/qvac-demo-adb`;
-const wrapperPath = `${wrapperRoot}/adb`;
+const wrapperPath = `${wrapperRoot}/platform-tools/adb`;
 const launchScript = `${wrapperRoot}/launch.sh`;
-runSync(["mkdir", "-p", wrapperRoot]);
+runSync(["mkdir", "-p", `${wrapperRoot}/platform-tools`]);
 await Bun.write(
 	wrapperPath,
 	`#!/usr/bin/env bash\nexec ${quote(adbPath)} "$@"\n`,
@@ -65,11 +65,11 @@ const shellScript = `#!/usr/bin/env bash
 set -e
 echo "launcher started: $(date -Is)" >>/tmp/qvac-demo-launch.log
 cd ${quote(repoRoot)}
-export ANDROID_HOME=${quote(sdkRoot)}
-export ANDROID_SDK_ROOT=${quote(sdkRoot)}
+export ANDROID_HOME=${quote(wrapperRoot)}
+export ANDROID_SDK_ROOT=${quote(wrapperRoot)}
 export WSL_HOST_IP="$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)"
 export ADB_SERVER_SOCKET="tcp:\${WSL_HOST_IP}:5037"
-export PATH=${quote(wrapperRoot)}:"$PATH"
+export PATH=${quote(`${wrapperRoot}/platform-tools`)}:"$PATH"
 powershell.exe -NoProfile -NonInteractive -Command ${quote(
 	`$adb = '${windowsSdkRoot}\\platform-tools\\adb.exe'; Start-Process -FilePath $adb -ArgumentList @('-a','-P','5037','nodaemon','server','start') -WindowStyle Hidden`,
 )} >/tmp/qvac-demo-adb-server.log 2>&1
