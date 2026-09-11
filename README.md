@@ -132,6 +132,19 @@ Referencia de escritorio, de las corridas de evaluación (Intel Core Ultra 7 258
 - La única conexión de red es la primera descarga de modelos desde el registro de QVAC, que usa Hyperswarm (P2P).
 - Las hojas se guardan en archivos JSON dentro del almacenamiento privado de la app.
 
+## Descargar e instalar
+
+Descarga el APK más reciente, generado automáticamente desde `main`:
+
+**https://github.com/tapilew/v2s/releases/latest/download/v2s.apk**
+
+1. Abre el enlace en un teléfono Android arm64 con Android 10 (API 29) o superior y unos 3 GB libres.
+2. Abre el archivo descargado y permite instalar apps de esa fuente cuando Android lo pida.
+3. Abre V2S con conexión a internet. La primera vez que uses cada modo, la app descarga su modelo.
+4. Después de descargar los dos modelos, la app funciona en modo avión.
+
+El APK está firmado con la clave de depuración de la plantilla de Expo: sirve para instalar a mano, no para la Play Store. El flujo `.github/workflows/android-apk.yml` lo construye y lo publica en cada push a `main`.
+
 ## Ejecutar en Android
 
 QVAC publica binarios nativos solo para `arm64-v8a`. Un emulador x86_64 no puede cargar los modelos. La demo real necesita un teléfono Android arm64 con Android 10 (API 29) o superior y unos 3 GB libres.
