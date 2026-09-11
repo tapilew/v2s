@@ -1,0 +1,36 @@
+FB-001: extractos de arranque de V2S build-1
+Dispositivo: Pixel 9 Pro, Android 17/API 37, arm64-v8a
+Commit del APK: c7296560effc64638a3c71ba526a1c04c6439c39
+SHA-256: 7c2cfdfa6932874b333e82744fff2ab64490be72b9620b6ad10a511a8a2051df
+Captura: logcat de main,system,crash filtrado por UID de V2S y por hora de inicio.
+Se omiten rutas de instalación, identificadores del teléfono y logs no necesarios.
+
+INTENTO 1, 10 sep 2026, UTC-5
+09-10 22:24:21.221 14349 14349 W SoLoader: Running a recovery step for libappmodules.so due to com.facebook.soloader.B: couldn't find DSO to load: libnativehelper.so
+09-10 22:24:21.222 14349 14349 W SoLoader: Failed to recover
+09-10 22:24:21.330 14349 14466 E ReactNativeJS: [runtime not ready]: Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'PlatformConstants' could not be found. Verify that a module by this name is registered in the native binary.
+09-10 22:24:21.333 14349 14466 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 14466 (mqt_v_js), pid 14349 (nymous.qvacdemo)
+Sondeo: ocho consultas a pidof, a intervalos de un segundo, todas sin PID.
+Actividad de V2S en primer plano al final: no.
+Veredicto del sondeo: FAIL.
+
+INTENTO 2, 10 sep 2026, UTC-5
+09-10 22:24:31.065 14679 14730 E ReactNativeJS: [runtime not ready]: Invariant Violation: TurboModuleRegistry.getEnforcing(...): 'PlatformConstants' could not be found. Verify that a module by this name is registered in the native binary.
+09-10 22:24:31.068 14679 14730 F libc    : Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 14730 (mqt_v_js), pid 14679 (nymous.qvacdemo)
+Sondeo: ocho consultas a pidof, a intervalos de un segundo, todas sin PID.
+Actividad de V2S en primer plano al final: no.
+Veredicto del sondeo: FAIL.
+
+INSPECCIÓN ELF DEL APK, SIN EJECUTAR SUS BIBLIOTECAS EN EL PORTÁTIL
+readelf -d libappmodules.so:
+  NEEDED: libbare-kit.so
+readelf -d libbare-kit.so:
+  NEEDED: libnativehelper.so
+nm -D --undefined-only libbare-kit.so:
+  U JNI_GetCreatedJavaVMs@LIBNATIVEHELPER_S
+
+INSPECCIÓN DE RUTAS DEL SISTEMA DEL TELÉFONO
+/apex/com.android.art/lib64/libnativehelper.so: existe.
+/system/etc/public.libraries.txt: incluye libnativehelper.so.
+No se encontró /system/lib64/libnativehelper.so en la consulta.
+El APK no contiene una entrada libnativehelper.so; por sí solo, esto no demuestra un defecto porque se trata de una biblioteca pública del sistema.

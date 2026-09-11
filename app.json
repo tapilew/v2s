@@ -40,7 +40,8 @@
 			],
 			"@qvac/sdk/expo-plugin",
 			"expo-audio",
-			"expo-sharing"
+			"expo-sharing",
+			"./plugins/with-nativehelper-loader.js"
 		]
 	}
 }
