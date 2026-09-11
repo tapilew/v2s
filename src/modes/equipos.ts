@@ -44,20 +44,23 @@ export type Visit = {
 
 export type Grounded = Pick<Visit, "extraction" | "unverified">;
 
+export type UnitAge = { years: number; count: number };
+
 export type Unit = {
 	key: string;
 	modality: Modality;
 	brand: string | null;
 	model: string | null;
 	quantity: number | null;
-	ageYears: number | null;
+	age: UnitAge | null;
 	status: Status;
 	confirmations: number;
 	lastSeenAt: number;
 	confidence: number;
-	renewal: boolean;
+	renewals: number;
 	stale: boolean;
 	sources: string[];
+	seen: Array<{ visitId: string; index: number }>;
 };
 
 export type ClientBase = {
@@ -79,7 +82,7 @@ export type FleetSummary = {
 
 export type ConfidenceInput = Pick<
 	Unit,
-	"brand" | "model" | "ageYears" | "status" | "confirmations" | "stale"
+	"brand" | "model" | "age" | "status" | "confirmations" | "stale"
 > & { located: boolean };
 
 export type ConfidenceFactor = { label: string; points: number };
@@ -433,51 +436,109 @@ export const assembleEquipos = (
 		: groundExtraction(parsed, text, now);
 };
 
-type Sighting = {
+type Sighting = { index: number; unit: ExtractedUnit };
+type UnitVisit = {
 	visitId: string;
 	at: number;
 	source: string;
-	unit: ExtractedUnit;
+	sightings: Sighting[];
 };
-type UnitDraft = { key: string; modality: Modality; sightings: Sighting[] };
+type UnitDraft = { key: string; modality: Modality; visits: UnitVisit[] };
 type ClientDraft = {
 	key: string;
 	reports: Array<{ at: number; extraction: Extraction }>;
 	units: UnitDraft[];
 };
+type Placement = { draft: UnitDraft; stacked: boolean; agreement: number };
 
 const latest = <T>(values: readonly (T | null)[]): T | null =>
 	values.reduce<T | null>((found, value) => value ?? found, null);
 
+const sum = (values: readonly number[]) =>
+	values.reduce((total, value) => total + value, 0);
+
 const compatible = (a: string | null, b: string | null) =>
 	a === null || b === null || normalize(a) === normalize(b);
 
-const matchScore = (draft: UnitDraft, sighting: Sighting) => {
-	const brand = latest(draft.sightings.map((seen) => seen.unit.marca));
-	const model = latest(draft.sightings.map((seen) => seen.unit.modelo));
-	const { unit } = sighting;
-	// Two entries in the same visit are two different machines, never one seen twice.
+const machines = (unit: ExtractedUnit) => unit.cantidad ?? 1;
+
+const unitsOf = (draft: UnitDraft) =>
+	draft.visits.flatMap((visit) => visit.sightings.map((seen) => seen.unit));
+
+const quantityReported = ({ sightings }: UnitVisit) =>
+	sightings.length === 1
+		? (sightings[0]?.unit.cantidad ?? null)
+		: sum(sightings.map((seen) => machines(seen.unit)));
+
+const quantityOf = (visits: readonly UnitVisit[]) => {
+	const counts = visits.flatMap((visit) => quantityReported(visit) ?? []);
+	return counts.length > 0 ? Math.max(...counts) : null;
+};
+
+// One visit can report the same unit several times, but never more machines than the unit is known to have.
+const placement = (
+	draft: UnitDraft,
+	visitId: string,
+	unit: ExtractedUnit,
+): Placement | null => {
+	const units = unitsOf(draft);
+	const brand = latest(units.map((seen) => seen.marca));
+	const model = latest(units.map((seen) => seen.modelo));
 	if (
-		draft.sightings.some((seen) => seen.visitId === sighting.visitId) ||
 		draft.modality !== unit.modalidad ||
 		!compatible(brand, unit.marca) ||
 		!compatible(model, unit.modelo)
 	)
-		return -1;
-	return (
-		Number(brand !== null && unit.marca !== null) +
-		Number(model !== null && unit.modelo !== null)
-	);
+		return null;
+	const current = draft.visits.find((visit) => visit.visitId === visitId);
+	const load = sum(current?.sightings.map((seen) => machines(seen.unit)) ?? []);
+	if (current && load + machines(unit) > (quantityOf(draft.visits) ?? 0))
+		return null;
+	return {
+		draft,
+		stacked: current !== undefined,
+		agreement:
+			Number(brand !== null && unit.marca !== null) +
+			Number(model !== null && unit.modelo !== null),
+	};
 };
+
+const preferred = (a: Placement, b: Placement) =>
+	Number(a.stacked) - Number(b.stacked) || b.agreement - a.agreement;
 
 const wholeYearsBetween = (from: number, to: number) =>
 	Math.max(0, Math.floor((to - from) / YEAR_MS));
+
+// The latest visit that gave any age decides; if it gave several, the oldest wins and covers only the machines said to be that old.
+const ageOf = (visits: readonly UnitVisit[], now: number): UnitAge | null => {
+	const aged = visits
+		.map((visit) => ({
+			at: visit.at,
+			said: visit.sightings.flatMap(({ unit }) =>
+				unit.antiguedad_anios === null
+					? []
+					: [{ years: unit.antiguedad_anios, count: machines(unit) }],
+			),
+		}))
+		.filter((visit) => visit.said.length > 0)
+		.at(-1);
+	if (aged === undefined) return null;
+	const years = Math.max(...aged.said.map((said) => said.years));
+	return {
+		years: years + wholeYearsBetween(aged.at, now),
+		count: sum(
+			aged.said
+				.filter((said) => said.years === years)
+				.map((said) => said.count),
+		),
+	};
+};
 
 export const confidenceFactors = (unit: ConfidenceInput): ConfidenceFactor[] =>
 	[
 		{ label: "Marca", points: unit.brand === null ? 0 : 15 },
 		{ label: "Modelo", points: unit.model === null ? 0 : 15 },
-		{ label: "Antigüedad", points: unit.ageYears === null ? 0 : 15 },
+		{ label: "Antigüedad", points: unit.age === null ? 0 : 15 },
 		{ label: "Ubicación", points: unit.located ? 15 : 0 },
 		{ label: unit.status, points: STATUS_POINTS[unit.status] },
 		{ label: "Varias visitas", points: unit.confirmations >= 2 ? 15 : 0 },
@@ -493,39 +554,34 @@ export const confidence = (unit: ConfidenceInput): number => {
 };
 
 const toUnit = (draft: UnitDraft, located: boolean, now: number): Unit => {
-	const { sightings } = draft;
-	const units = sightings.map((seen) => seen.unit);
-	const aged = sightings.reduce<{ at: number; age: number } | null>(
-		(found, seen) =>
-			seen.unit.antiguedad_anios === null
-				? found
-				: { at: seen.at, age: seen.unit.antiguedad_anios },
-		null,
-	);
-	const counts = units.flatMap((unit) =>
-		unit.cantidad === null ? [] : [unit.cantidad],
-	);
-	const lastSeenAt = Math.max(...sightings.map((seen) => seen.at));
-	const ageYears =
-		aged === null ? null : aged.age + wholeYearsBetween(aged.at, now);
+	const { visits } = draft;
+	const units = unitsOf(draft);
+	const lastSeenAt = Math.max(...visits.map((visit) => visit.at));
+	const age = ageOf(visits, now);
 	const facts = {
 		brand: latest(units.map((unit) => unit.marca)),
 		model: latest(units.map((unit) => unit.modelo)),
-		ageYears,
+		age,
 		status:
 			STATUSES.find((status) => units.some((unit) => unit.estado === status)) ??
 			"Desconocido",
-		confirmations: sightings.length,
+		confirmations: visits.length,
 		stale: now - lastSeenAt > STALE_AFTER_MS,
 	};
 	return {
 		key: draft.key,
 		modality: draft.modality,
-		quantity: counts.length > 0 ? Math.max(...counts) : null,
+		quantity: quantityOf(visits),
 		lastSeenAt,
-		renewal: ageYears !== null && ageYears >= RENEWAL_YEARS,
+		renewals: age !== null && age.years >= RENEWAL_YEARS ? age.count : 0,
 		confidence: confidence({ ...facts, located }),
-		sources: [...new Set(sightings.map((seen) => seen.source))],
+		sources: [...new Set(visits.map((visit) => visit.source))],
+		seen: visits.flatMap((visit) =>
+			visit.sightings.map((seen) => ({
+				visitId: visit.visitId,
+				index: seen.index,
+			})),
+		),
 		...facts,
 	};
 };
@@ -558,28 +614,29 @@ export const installedBase = (
 		clients.set(key, client);
 		client.reports.push({ at: visit.at, extraction });
 		extraction.equipos.forEach((unit, index) => {
-			const sighting = {
+			const sighting = { index, unit };
+			const [best] = client.units
+				.flatMap((draft) => placement(draft, visit.id, unit) ?? [])
+				.sort(preferred);
+			const current = best?.draft.visits.find(
+				(seen) => seen.visitId === visit.id,
+			);
+			if (current) {
+				current.sightings.push(sighting);
+				return;
+			}
+			const report = {
 				visitId: visit.id,
 				at: visit.at,
 				source: visit.source,
-				unit,
+				sightings: [sighting],
 			};
-			const best = client.units.reduce<{
-				draft: UnitDraft | null;
-				score: number;
-			}>(
-				(found, draft) => {
-					const score = matchScore(draft, sighting);
-					return score > found.score ? { draft, score } : found;
-				},
-				{ draft: null, score: -1 },
-			);
-			if (best.draft) best.draft.sightings.push(sighting);
+			if (best) best.draft.visits.push(report);
 			else
 				client.units.push({
 					key: `${key}/${visit.id}/${index}`,
 					modality: unit.modalidad,
-					sightings: [sighting],
+					visits: [report],
 				});
 		});
 	}
@@ -601,20 +658,34 @@ export const fleetSummary = (bases: readonly ClientBase[]): FleetSummary => {
 		}))
 			.filter((entry) => entry.units > 0)
 			.sort((a, b) => b.units - a.units),
-		renewals: count(units.filter((unit) => unit.renewal)),
+		renewals: sum(units.map((unit) => unit.renewals)),
 		stale: count(units.filter((unit) => unit.stale)),
 	};
 };
 
-export const nextQuestion = (extraction: Extraction): string | null => {
+// Asks about the units this visit merged into, so a datum an earlier visit already gave is not asked again.
+export const nextQuestion = (
+	visit: Visit,
+	bases: readonly ClientBase[],
+): string | null => {
+	const { extraction } = visit;
+	if (extraction === null) return null;
 	if (!extraction.cliente) return "¿En qué hospital o clínica estás?";
-	const unbranded = extraction.equipos.find((unit) => unit.marca === null);
-	if (unbranded) return `¿De qué marca es ${UNIT_NOUN[unbranded.modalidad]}?`;
-	const undated = extraction.equipos.find(
-		(unit) => unit.antiguedad_anios === null,
+	const key = normalize(extraction.cliente);
+	const base = bases.find((found) => found.key === key);
+	const units = extraction.equipos.flatMap(
+		(_, index) =>
+			base?.units.find((unit) =>
+				unit.seen.some(
+					(seen) => seen.visitId === visit.id && seen.index === index,
+				),
+			) ?? [],
 	);
-	if (undated) return `¿Qué antigüedad tiene ${UNIT_NOUN[undated.modalidad]}?`;
-	if (!extraction.ciudad && !extraction.pais)
+	const unbranded = units.find((unit) => unit.brand === null);
+	if (unbranded) return `¿De qué marca es ${UNIT_NOUN[unbranded.modality]}?`;
+	const undated = units.find((unit) => unit.age === null);
+	if (undated) return `¿Qué antigüedad tiene ${UNIT_NOUN[undated.modality]}?`;
+	if (!base?.city && !base?.country)
 		return `¿En qué ciudad está ${extraction.cliente}?`;
 	return null;
 };
@@ -637,11 +708,12 @@ export const equiposColumns = [
 	{ key: "marca", label: "Marca" },
 	{ key: "modelo", label: "Modelo" },
 	{ key: "antiguedad_anios", label: "Antigüedad (años)" },
+	{ key: "con_antiguedad", label: "Con esa antigüedad" },
 	{ key: "estado", label: "Estado" },
 	{ key: "confianza", label: "Confianza" },
 	{ key: "confirmaciones", label: "Confirmaciones" },
 	{ key: "ultima_visita", label: "Última visita" },
-	{ key: "renovar", label: "Renovar" },
+	{ key: "por_renovar", label: "Por renovar" },
 	{ key: "sin_verificar", label: "Sin verificar" },
 	{ key: "texto_original", label: "Texto original" },
 ] as const;
@@ -668,12 +740,13 @@ export const equiposRows = (bases: readonly ClientBase[]): EquiposRow[] =>
 			cantidad: unit.quantity,
 			marca: unit.brand,
 			modelo: unit.model,
-			antiguedad_anios: unit.ageYears,
+			antiguedad_anios: unit.age?.years ?? null,
+			con_antiguedad: unit.age?.count ?? null,
 			estado: unit.status,
 			confianza: unit.confidence,
 			confirmaciones: unit.confirmations,
 			ultima_visita: localIsoDate(unit.lastSeenAt),
-			renovar: yesNo(unit.renewal),
+			por_renovar: unit.renewals,
 			sin_verificar: yesNo(unit.stale),
 			texto_original: unit.sources.join("\n"),
 		})),

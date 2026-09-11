@@ -934,7 +934,9 @@ function Assistant() {
 			? (ledger.find((record) => record.id === focus.recordId) ?? null)
 			: null;
 	const asked =
-		focused && extractingId !== focused.id ? mode.ask(focused) : null;
+		focused && extractingId !== focused.id
+			? mode.ask(focused, ledger, new Date())
+			: null;
 	const question =
 		focused && asked && !closed.has(questionKey(focused.id, asked))
 			? asked

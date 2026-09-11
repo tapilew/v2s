@@ -17,6 +17,7 @@ import {
 	parseExtraction,
 	type Visit,
 } from "./equipos";
+import { salud } from "./salud";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 8, 10, 12);
@@ -54,6 +55,22 @@ const visit = (
 	extraction: extraction(overrides),
 	unverified: [],
 });
+
+const captured = (
+	id: string,
+	at: number,
+	text: string,
+	modelText: string,
+): Visit => {
+	const draft = salud.assemble(text, modelText, new Date(at));
+	if (draft === null) throw new Error(`${id} must assemble`);
+	return { id, at, source: text, ...draft };
+};
+
+const resonance = (visits: readonly Visit[]) =>
+	fleetSummary(installedBase(visits, NOW)).byModality.find(
+		(entry) => entry.modality === "Resonancia magnética",
+	)?.units;
 
 const stringFields = (node: unknown): unknown[] => {
 	if (typeof node !== "object" || node === null) return [];
@@ -179,40 +196,36 @@ describe("assembleEquipos", () => {
 		);
 		const grounded = assembleEquipos(BRIEF, modelText, TODAY);
 		expect(grounded.unverified).toEqual([]);
-		const [base] = installedBase(
-			[{ id: "brief", at: NOW, source: BRIEF, ...grounded }],
-			NOW,
-		);
+		const brief = { id: "brief", at: NOW, source: BRIEF, ...grounded };
+		const bases = installedBase([brief], NOW);
 		expect(
-			base?.units.map(({ modality, status, ageYears, renewal }) => ({
+			bases[0]?.units.map(({ modality, status, age, renewals }) => ({
 				modality,
 				status,
-				ageYears,
-				renewal,
+				age,
+				renewals,
 			})),
 		).toEqual([
 			{
 				modality: "Resonancia magnética",
 				status: "Estimado",
-				ageYears: 8,
-				renewal: true,
+				age: { years: 8, count: 1 },
+				renewals: 1,
 			},
 			{
 				modality: "Resonancia magnética",
 				status: "Confirmado",
-				ageYears: null,
-				renewal: false,
+				age: null,
+				renewals: 0,
 			},
 			{
 				modality: "Tomografía",
 				status: "Confirmado",
-				ageYears: null,
-				renewal: false,
+				age: null,
+				renewals: 0,
 			},
 		]);
-		expect(grounded.extraction && nextQuestion(grounded.extraction)).toBe(
-			"¿De qué marca es el tomógrafo?",
-		);
+		expect(nextQuestion(brief, bases)).toBe("¿De qué marca es el tomógrafo?");
 	});
 
 	test("drops a model the text never said", () => {
@@ -393,7 +406,127 @@ describe("installedBase", () => {
 			],
 			NOW,
 		);
-		expect(base?.units.map((u) => u.ageYears)).toEqual([8, null]);
+		expect(base?.units.map((u) => u.age)).toEqual([
+			{ years: 8, count: 1 },
+			null,
+		]);
+	});
+
+	test("the demo capture merges into the seeded DemoCare units without growing the fleet", () => {
+		const seed = salud.demo.seed(TODAY);
+		const capture = captured(
+			"capture",
+			NOW,
+			salud.demo.example,
+			salud.demo.modelText,
+		);
+		const before = fleetSummary(installedBase(seed, NOW));
+		const bases = installedBase([...seed, capture], NOW);
+		const after = fleetSummary(bases);
+		expect(after.units).toBe(before.units);
+		expect(resonance([...seed, capture])).toBe(resonance(seed));
+		expect(after.renewals - before.renewals).toBeLessThanOrEqual(1);
+		const democare = bases.find(
+			(base) => base.name === "Hospital DemoCare Pacific",
+		);
+		const resonators = democare?.units.filter(
+			(found) => found.modality === "Resonancia magnética",
+		);
+		expect(resonators).toHaveLength(1);
+		expect(resonators?.[0]).toMatchObject({
+			brand: "Philips",
+			model: "Ingenia",
+			quantity: 2,
+			confirmations: 2,
+			age: { years: 8, count: 1 },
+			renewals: 1,
+		});
+		expect(
+			democare?.units.find((found) => found.modality === "Tomografía"),
+		).toMatchObject({ brand: "Canon", status: "Confirmado", confirmations: 2 });
+		const question = nextQuestion(capture, bases);
+		expect(question).not.toBe("¿De qué marca es el tomógrafo?");
+		expect(question).toBeNull();
+	});
+
+	test("a later visit with tres resonadores grows the count by one", () => {
+		const seed = salud.demo.seed(TODAY);
+		const capture = captured(
+			"capture",
+			NOW - 2 * DAY,
+			salud.demo.example,
+			salud.demo.modelText,
+		);
+		const text =
+			"Volví al Hospital DemoCare Pacific, en Panamá. Ahora tienen tres resonadores Philips.";
+		const said = (equipos: ExtractedUnit[]) =>
+			captured("later", NOW, text, JSON.stringify(extraction({ equipos })));
+		const shapes = [
+			said([unit({ cantidad: 3 })]),
+			said([
+				unit({ cantidad: null }),
+				unit({ cantidad: null }),
+				unit({ cantidad: null }),
+			]),
+		];
+		for (const later of shapes) {
+			const visits = [...seed, capture, later];
+			expect(resonance(visits)).toBe((resonance(seed) ?? 0) + 1);
+			expect(fleetSummary(installedBase(visits, NOW)).units).toBe(
+				fleetSummary(installedBase(seed, NOW)).units + 1,
+			);
+		}
+	});
+
+	test("prefers a distinct compatible unit before stacking on one", () => {
+		const [base] = installedBase(
+			[
+				visit("first", NOW - 30 * DAY, {
+					equipos: [
+						unit({ cantidad: 2, modelo: "Ingenia" }),
+						unit({ modelo: "Achieva" }),
+					],
+				}),
+				visit("second", NOW, { equipos: [unit(), unit()] }),
+			],
+			NOW,
+		);
+		expect(
+			base?.units.map(({ model, quantity, confirmations }) => ({
+				model,
+				quantity,
+				confirmations,
+			})),
+		).toEqual([
+			{ model: "Ingenia", quantity: 2, confirmations: 2 },
+			{ model: "Achieva", quantity: 1, confirmations: 2 },
+		]);
+	});
+
+	test("stacks same-visit sightings only while the known quantity has room", () => {
+		const tomographs = (cantidad: number | null) =>
+			installedBase(
+				[
+					visit("first", NOW - DAY, {
+						equipos: [unit({ modalidad: "Tomografía", cantidad })],
+					}),
+					visit("second", NOW, {
+						equipos: [
+							unit({ modalidad: "Tomografía", cantidad: null }),
+							unit({ modalidad: "Tomografía", cantidad: null }),
+						],
+					}),
+				],
+				NOW,
+			)[0]?.units.map(({ quantity, confirmations }) => ({
+				quantity,
+				confirmations,
+			}));
+		expect(tomographs(2)).toEqual([{ quantity: 2, confirmations: 2 }]);
+		expect(tomographs(null)).toEqual([
+			{ quantity: null, confirmations: 2 },
+			{ quantity: null, confirmations: 1 },
+		]);
 	});
 
 	test("does not merge units whose brands differ", () => {
@@ -420,8 +553,8 @@ describe("installedBase", () => {
 			],
 			NOW,
 		);
-		expect(base?.units[0]?.ageYears).toBe(8);
-		expect(base?.units[0]?.renewal).toBe(true);
+		expect(base?.units[0]?.age).toEqual({ years: 8, count: 1 });
+		expect(base?.units[0]?.renewals).toBe(1);
 	});
 
 	test("flags renewal at eight years and staleness after 180 days", () => {
@@ -434,10 +567,13 @@ describe("installedBase", () => {
 				],
 				NOW,
 			);
-			return { renewal: base?.units[0]?.renewal, stale: base?.units[0]?.stale };
+			return {
+				renewals: base?.units[0]?.renewals,
+				stale: base?.units[0]?.stale,
+			};
 		};
-		expect(ageAndStale(7, 179)).toEqual({ renewal: false, stale: false });
-		expect(ageAndStale(8, 181)).toEqual({ renewal: true, stale: true });
+		expect(ageAndStale(7, 179)).toEqual({ renewals: 0, stale: false });
+		expect(ageAndStale(8, 181)).toEqual({ renewals: 1, stale: true });
 	});
 
 	test("skips visits without a client and sorts clients by latest visit", () => {
@@ -478,7 +614,7 @@ describe("confidence", () => {
 			confidenceFactors({
 				brand: "Philips",
 				model: null,
-				ageYears: 8,
+				age: { years: 8, count: 1 },
 				located: true,
 				status: "Estimado",
 				confirmations: 1,
@@ -497,7 +633,7 @@ describe("confidence", () => {
 			confidence({
 				brand: null,
 				model: null,
-				ageYears: null,
+				age: null,
 				located: false,
 				status: "Desconocido",
 				confirmations: 1,
@@ -508,7 +644,7 @@ describe("confidence", () => {
 			confidence({
 				brand: "Philips",
 				model: "Ingenia",
-				ageYears: 3,
+				age: { years: 3, count: 1 },
 				located: true,
 				status: "Confirmado",
 				confirmations: 3,
@@ -554,29 +690,41 @@ describe("fleetSummary", () => {
 
 describe("nextQuestion", () => {
 	test("asks for the most valuable missing datum first", () => {
+		const ask = (overrides: Partial<Extraction>) => {
+			const only = visit("only", NOW, overrides);
+			return nextQuestion(only, installedBase([only], NOW));
+		};
 		const tomograph = unit({ modalidad: "Tomografía", marca: null });
-		expect(
-			nextQuestion(extraction({ cliente: null, equipos: [tomograph] })),
-		).toBe("¿En qué hospital o clínica estás?");
-		expect(nextQuestion(extraction({ pais: null, equipos: [tomograph] }))).toBe(
+		expect(ask({ cliente: null, equipos: [tomograph] })).toBe(
+			"¿En qué hospital o clínica estás?",
+		);
+		expect(ask({ pais: null, equipos: [tomograph] })).toBe(
 			"¿De qué marca es el tomógrafo?",
 		);
 		expect(
-			nextQuestion(
-				extraction({
-					pais: null,
-					equipos: [unit({ modalidad: "Medicina nuclear" })],
-				}),
-			),
+			ask({ pais: null, equipos: [unit({ modalidad: "Medicina nuclear" })] }),
 		).toBe("¿Qué antigüedad tiene la gammacámara?");
-		expect(
-			nextQuestion(
-				extraction({ pais: null, equipos: [unit({ antiguedad_anios: 4 })] }),
-			),
-		).toBe("¿En qué ciudad está Hospital DemoCare Pacific?");
-		expect(
-			nextQuestion(extraction({ equipos: [unit({ antiguedad_anios: 4 })] })),
-		).toBeNull();
+		expect(ask({ pais: null, equipos: [unit({ antiguedad_anios: 4 })] })).toBe(
+			"¿En qué ciudad está Hospital DemoCare Pacific?",
+		);
+		expect(ask({ equipos: [unit({ antiguedad_anios: 4 })] })).toBeNull();
+	});
+
+	test("skips a datum an earlier visit already gave the merged unit", () => {
+		const earlier = visit("earlier", NOW - DAY, {
+			ciudad: "Panamá",
+			equipos: [
+				unit({ modalidad: "Tomografía", marca: "Canon", antiguedad_anios: 11 }),
+			],
+		});
+		const now = visit("now", NOW, {
+			pais: null,
+			equipos: [unit({ modalidad: "Tomografía", marca: null })],
+		});
+		expect(nextQuestion(now, installedBase([now], NOW))).toBe(
+			"¿De qué marca es el tomógrafo?",
+		);
+		expect(nextQuestion(now, installedBase([earlier, now], NOW))).toBeNull();
 	});
 });
 
@@ -621,11 +769,12 @@ describe("equiposRows", () => {
 				marca: "Philips",
 				modelo: null,
 				antiguedad_anios: 10,
+				con_antiguedad: 1,
 				estado: "Confirmado",
 				confianza: 65,
 				confirmaciones: 2,
 				ultima_visita: "2026-02-22",
-				renovar: "Sí",
+				por_renovar: 1,
 				sin_verificar: "Sí",
 				texto_original:
 					"Vi un resonador Philips de nueve años.\nOtra vez el resonador Philips.",
@@ -657,8 +806,8 @@ describe("equiposCsv", () => {
 		);
 		expect(csv.charCodeAt(0)).toBe(0xfeff);
 		expect(csv.slice(1).split("\r\n")).toEqual([
-			"Cliente,Ciudad,País,Modalidad,Cantidad,Marca,Modelo,Antigüedad (años),Estado,Confianza,Confirmaciones,Última visita,Renovar,Sin verificar,Texto original",
-			'"Clínica ""La Paz"", Sede Norte",,Panamá,Resonancia magnética,1,Philips,"Ingenia\n1.5T",,Confirmado,70,1,2026-09-10,No,No,"Vi un resonador, Philips.\nPregunta: ¿Qué modelo es?\nRespuesta: Ingenia"',
+			"Cliente,Ciudad,País,Modalidad,Cantidad,Marca,Modelo,Antigüedad (años),Con esa antigüedad,Estado,Confianza,Confirmaciones,Última visita,Por renovar,Sin verificar,Texto original",
+			'"Clínica ""La Paz"", Sede Norte",,Panamá,Resonancia magnética,1,Philips,"Ingenia\n1.5T",,,Confirmado,70,1,2026-09-10,0,No,"Vi un resonador, Philips.\nPregunta: ¿Qué modelo es?\nRespuesta: Ingenia"',
 			"",
 		]);
 	});

@@ -113,7 +113,11 @@ export type ModeSpec<E> = {
 	edit: (draft: Draft<E>, index: number, key: string, value: Cell) => Draft<E>;
 	remove: (draft: Draft<E>, index: number) => Draft<E> | null;
 	followUp: {
-		ask: (extraction: E) => string | null;
+		ask: (
+			record: SourceRecord<E>,
+			records: readonly SourceRecord<E>[],
+			now: Date,
+		) => string | null;
 		answer: (source: string, question: string, answer: string) => string;
 	} | null;
 	demo: {
@@ -151,7 +155,11 @@ export type Mode = {
 		value: Cell,
 	) => LooseRecord;
 	remove: (record: LooseRecord, index: number) => LooseRecord | null;
-	ask: (record: LooseRecord) => string | null;
+	ask: (
+		record: LooseRecord,
+		records: readonly LooseRecord[],
+		now: Date,
+	) => string | null;
 	answer: (source: string, question: string, answer: string) => string;
 	demo: {
 		seed: (now: Date) => LooseRecord[];
@@ -207,11 +215,11 @@ export const defineMode = <E>(
 			const left = spec.remove(draft, index);
 			return left === null ? null : { ...record, ...left };
 		},
-		ask: (record) => {
-			const { extraction } = typed(record);
-			return extraction === null || spec.followUp === null
+		ask: (record, records, now) => {
+			const read = typed(record);
+			return read.extraction === null || spec.followUp === null
 				? null
-				: spec.followUp.ask(extraction);
+				: spec.followUp.ask(read, all(records), now);
 		},
 		answer: (source, question, answer) =>
 			spec.followUp === null

@@ -70,11 +70,12 @@ const INPUTS: Record<EquiposKey, FieldInput> = {
 	marca: TEXT,
 	modelo: TEXT,
 	antiguedad_anios: NUMBER,
+	con_antiguedad: READONLY,
 	estado: { kind: "choice", options: STATUSES },
 	confianza: READONLY,
 	confirmaciones: READONLY,
 	ultima_visita: READONLY,
-	renovar: READONLY,
+	por_renovar: READONLY,
 	sin_verificar: READONLY,
 	texto_original: READONLY,
 };
@@ -120,17 +121,34 @@ const unitTitle = (unit: Unit) =>
 		? `${unit.modality} ×${unit.quantity}`
 		: unit.modality;
 
+const partOf = (unit: Unit, machines: number) =>
+	unit.quantity !== null && machines < unit.quantity
+		? `${machines} de ${unit.quantity}`
+		: null;
+
 const unitDetail = (unit: Unit) => {
 	const name =
 		unit.brand === null
 			? ["Marca sin confirmar", unit.model].filter(Boolean).join(" · ")
 			: [unit.brand, unit.model].filter(Boolean).join(" ");
-	if (unit.ageYears === null) return name;
-	const age =
-		unit.ageYears < 1
+	if (unit.age === null) return name;
+	const years =
+		unit.age.years < 1
 			? "menos de 1 año"
-			: count(Math.round(unit.ageYears), "año", "años");
-	return `${name} · ${age}`;
+			: count(Math.round(unit.age.years), "año", "años");
+	const part = partOf(unit, unit.age.count);
+	return `${name} · ${part === null ? years : `${part} con ${years}`}`;
+};
+
+const renewalTag = (unit: Unit): Badge[] => {
+	if (unit.renewals === 0) return [];
+	const part = partOf(unit, unit.renewals);
+	return [
+		{
+			label: part === null ? "Renovar" : `Renovar ${part}`,
+			tone: "renewal",
+		},
+	];
 };
 
 // A unit key is "client/visit/index" of the visit that first reported it; edits and deletes go to that visit.
@@ -155,7 +173,7 @@ const unitLine = (
 	const unverified = flaggedKeys(records.get(recordId), index);
 	const located = base.city !== null || base.country !== null;
 	const tags: Badge[] = [
-		...(unit.renewal ? [{ label: "Renovar", tone: "renewal" as const }] : []),
+		...renewalTag(unit),
 		...(unit.stale
 			? [{ label: "Sin verificar", tone: "unknown" as const }]
 			: []),
@@ -471,6 +489,9 @@ export const salud: ModeSpec<Extraction> = {
 	csv: (records, now) => equiposCsv(basesOf(records, now)),
 	edit,
 	remove,
-	followUp: { ask: nextQuestion, answer: appendAnswer },
+	followUp: {
+		ask: (record, records, now) => nextQuestion(record, basesOf(records, now)),
+		answer: appendAnswer,
+	},
 	demo: { seed, example: DEMO_EXAMPLE, modelText: DEMO_MODEL_TEXT },
 };

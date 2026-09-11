@@ -100,7 +100,10 @@ const spec: ModeSpec<Items> = {
 		return left.length > 0 ? { extraction: left, unverified: [] } : null;
 	},
 	followUp: {
-		ask: (extraction) => (extraction.length < 2 ? "¿Algo más?" : null),
+		ask: (record, records) =>
+			(record.extraction?.length ?? 0) < 2 && records.length > 0
+				? "¿Algo más?"
+				: null,
 		answer: (source, question, answer) => `${source} | ${question} ${answer}`,
 	},
 	demo: { seed: () => [], example: "ejemplo", modelText: "[]" },
@@ -142,11 +145,13 @@ describe("defineMode", () => {
 	});
 
 	test("ask and answer use the follow-up when the mode has one", () => {
-		expect(mode.ask(record(["a"]))).toBe("¿Algo más?");
-		expect(mode.ask(record(null))).toBeNull();
+		const now = new Date();
+		const ledger = [record(["a"]), record({ roto: true })];
+		expect(mode.ask(record(["a"]), ledger, now)).toBe("¿Algo más?");
+		expect(mode.ask(record(null), ledger, now)).toBeNull();
 		expect(mode.answer("vi a", "¿Algo más?", "b")).toBe("vi a | ¿Algo más? b");
 		const silent = defineMode("salud", extractor, { ...spec, followUp: null });
-		expect(silent.ask(record(["a"]))).toBeNull();
+		expect(silent.ask(record(["a"]), ledger, now)).toBeNull();
 		expect(silent.answer("vi a", "¿Algo más?", "b")).toBe("vi a");
 	});
 });

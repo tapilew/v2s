@@ -24,7 +24,8 @@ describe("demo example", () => {
 			null,
 			null,
 		]);
-		expect(salud.followUp?.ask(draft.extraction)).toBe(
+		const record = { id: "r1", at: NOW.getTime(), source: "x", ...draft };
+		expect(salud.followUp?.ask(record, [record], NOW)).toBe(
 			"¿De qué marca es el tomógrafo?",
 		);
 	});
@@ -71,6 +72,42 @@ describe("seed", () => {
 			{ label: "Tomografía", value: "2", tone: "neutral" },
 			{ label: "Por renovar", value: "2", tone: "renewal" },
 		]);
+	});
+
+	test("the demo capture shows one aged resonator of two in the card, tiles and csv", () => {
+		const records = salud.demo.seed(NOW);
+		const capture = {
+			id: "capture",
+			at: NOW.getTime(),
+			source: salud.demo.example,
+			...exampleDraft(),
+		};
+		const ledger = [...records, capture];
+		expect(salud.summary(ledger, NOW)).toEqual([
+			{ label: "Clientes", value: "3", tone: "neutral" },
+			{ label: "Equipos", value: "11", tone: "neutral" },
+			{ label: "Resonancia", value: "3", tone: "neutral" },
+			{ label: "Mamografía", value: "3", tone: "neutral" },
+			{ label: "Tomografía", value: "2", tone: "neutral" },
+			{ label: "Por renovar", value: "3", tone: "renewal" },
+		]);
+		const democare = cardsOf(salud.view(ledger, NOW)).find(
+			(client) => client.name === "Hospital DemoCare Pacific",
+		);
+		const [resonators] = democare?.units ?? [];
+		expect(resonators?.title).toBe("Resonancia magnética ×2");
+		expect(resonators?.detail).toBe("Philips Ingenia · 1 de 2 con 8 años");
+		expect(resonators?.tags.map((tag) => tag.label)).toEqual([
+			"Renovar 1 de 2",
+		]);
+		expect(resonators?.row.cells).toMatchObject({
+			cantidad: 2,
+			antiguedad_anios: 8,
+			con_antiguedad: 1,
+			confirmaciones: 2,
+			por_renovar: 1,
+		});
+		expect(salud.followUp?.ask(capture, ledger, NOW)).toBeNull();
 	});
 
 	test("csv lists every unit under the equipos header", () => {
