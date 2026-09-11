@@ -112,7 +112,8 @@ const composerStores = byMode((id) =>
 	openTextStore(`${filePrefix}composer-${id}`),
 );
 
-const ACCENT = "#7FE3D4";
+const ACCENT = "#B8F56F";
+const INK = "#122014";
 const METER_BARS = 9;
 const MAX_RECORDING_SECONDS = 600;
 
@@ -1380,7 +1381,7 @@ function Assistant() {
 					<Text numberOfLines={1} style={styles.title}>
 						{mode.label}
 					</Text>
-					<Text style={styles.chevron}>⌄</Text>
+					<View style={[styles.chevron, menuOpen && styles.chevronOpen]} />
 				</PressableBox>
 				<PressableBox
 					accessibilityLabel="Ver los modelos que corren en el dispositivo"
@@ -1577,7 +1578,7 @@ function Assistant() {
 							]}
 						>
 							{phase.kind === "starting" || phase.kind === "transcribing" ? (
-								<ActivityIndicator color="#0A211D" size="small" />
+								<ActivityIndicator color={INK} size="small" />
 							) : (
 								<Text
 									style={[
@@ -1675,11 +1676,21 @@ const styles = StyleSheet.create({
 		fontWeight: "700",
 		letterSpacing: -0.6,
 	},
-	chevron: { color: "#8CA39D", fontSize: 22, marginTop: -8 },
+	chevron: {
+		borderBottomWidth: 2,
+		borderColor: "#8CA39D",
+		borderRightWidth: 2,
+		height: 10,
+		marginHorizontal: 4,
+		marginTop: -5,
+		transform: [{ rotate: "45deg" }],
+		width: 10,
+	},
+	chevronOpen: { marginTop: 5, transform: [{ rotate: "-135deg" }] },
 	localBadge: {
 		alignItems: "center",
-		backgroundColor: "#132020",
-		borderColor: "#27443F",
+		backgroundColor: "#161F12",
+		borderColor: "#34482A",
 		borderRadius: 22,
 		borderWidth: 1,
 		flexDirection: "row",
@@ -1829,7 +1840,7 @@ const styles = StyleSheet.create({
 		minHeight: 44,
 		paddingHorizontal: 14,
 	},
-	exportText: { color: "#0A211D", fontSize: 14, fontWeight: "800" },
+	exportText: { color: INK, fontSize: 14, fontWeight: "800" },
 	tableHead: {
 		borderBottomColor: "#22312D",
 		borderBottomWidth: 1,
@@ -1899,7 +1910,7 @@ const styles = StyleSheet.create({
 	empty: { gap: 10, paddingVertical: 4 },
 	emptyTitle: { color: "#EDF5EA", fontSize: 16, fontWeight: "700" },
 	exampleQuote: {
-		backgroundColor: "#132A26",
+		backgroundColor: "#1A2614",
 		borderRadius: 14,
 		borderTopLeftRadius: 4,
 		padding: 12,
@@ -1914,7 +1925,7 @@ const styles = StyleSheet.create({
 	ghost: { opacity: 0.55 },
 	pendingCard: {
 		backgroundColor: "#111816",
-		borderColor: "#2A4A44",
+		borderColor: "#3D5230",
 		borderRadius: 14,
 		borderStyle: "dashed",
 		borderWidth: 1,
@@ -1958,7 +1969,7 @@ const styles = StyleSheet.create({
 	},
 	question: {
 		alignItems: "center",
-		backgroundColor: "#132A26",
+		backgroundColor: "#1A2614",
 		borderRadius: 12,
 		flexDirection: "row",
 		gap: 8,
@@ -2017,7 +2028,7 @@ const styles = StyleSheet.create({
 		width: 52,
 	},
 	micButtonRecording: { backgroundColor: "#F6B8A8" },
-	micGlyph: { color: "#0A211D", fontSize: 20, fontWeight: "800" },
+	micGlyph: { color: INK, fontSize: 20, fontWeight: "800" },
 	primaryButton: {
 		alignItems: "center",
 		backgroundColor: ACCENT,
@@ -2026,7 +2037,7 @@ const styles = StyleSheet.create({
 		minHeight: 52,
 		paddingHorizontal: 16,
 	},
-	primaryText: { color: "#0A211D", fontSize: 15, fontWeight: "800" },
+	primaryText: { color: INK, fontSize: 15, fontWeight: "800" },
 	secondaryButton: {
 		alignItems: "center",
 		borderColor: "#2A3A36",
@@ -2131,7 +2142,7 @@ const styles = StyleSheet.create({
 		minHeight: 44,
 		paddingHorizontal: 12,
 	},
-	optionOn: { backgroundColor: "#173A34", borderColor: ACCENT },
+	optionOn: { backgroundColor: "#26361A", borderColor: ACCENT },
 	optionText: { color: "#BFD9D3", fontSize: 13, fontWeight: "600" },
 	optionTextOn: { color: ACCENT },
 	pressedSoft: { opacity: 0.6 },
