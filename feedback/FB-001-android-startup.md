@@ -163,6 +163,8 @@ ADB=/ruta/a/adb ANDROID_SERIAL=<telefono> python3 scripts/smoke-android-startup.
 | Interfaz | Biblioteca vacía visible; progreso de descarga de Qwen3 observado |
 | Errores originales | Ausentes en los cuatro arranques; resolución de `libnativehelper.so` confirmada en todos |
 
+**Límite de la evidencia:** el APK probado es build 4, del commit `d0251c2`. El cambio adicional que hace OpenCL opcional, integrado en `main` por `4c549b640277e1ba5c637d9b2b98fe11571958a9`, no forma parte de ese APK y aún no se ha probado aquí. Estos resultados no validan automáticamente versiones posteriores de `main`.
+
 Resumen verificable, sin identificadores personales del teléfono: [`evidence/FB-001-startup-fixed.json`](evidence/FB-001-startup-fixed.json).
 
 ## Criterios de cierre cumplidos
