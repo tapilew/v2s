@@ -1,0 +1,286 @@
+[
+	{
+		"id": "e1",
+		"text": "Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores Philips y un tomógrafo. Uno de los resonadores parece de unos ocho años.",
+		"gold": {
+			"cliente": "Hospital DemoCare Pacific",
+			"ciudad": null,
+			"pais": "Panamá",
+			"equipos": [
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 1,
+					"marca": "Philips",
+					"modelo": null,
+					"antiguedad_anios": 8,
+					"estado": "Estimado"
+				},
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 1,
+					"marca": "Philips",
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				},
+				{
+					"modalidad": "Tomografía",
+					"cantidad": 1,
+					"marca": null,
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e2",
+		"text": "En la Clínica San Rafael de Medellín, Colombia, tienen un ecógrafo GE Logiq E10 nuevo y el jefe de radiología me dijo que el tomógrafo Siemens es de 2015.",
+		"gold": {
+			"cliente": "Clínica San Rafael",
+			"ciudad": "Medellín",
+			"pais": "Colombia",
+			"equipos": [
+				{
+					"modalidad": "Ultrasonido",
+					"cantidad": 1,
+					"marca": "GE",
+					"modelo": "Logiq E10",
+					"antiguedad_anios": 0,
+					"estado": "Confirmado"
+				},
+				{
+					"modalidad": "Tomografía",
+					"cantidad": 1,
+					"marca": "Siemens",
+					"modelo": null,
+					"antiguedad_anios": 11,
+					"estado": "Reportado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e3",
+		"text": "Pasé por el Centro Médico Paitilla. Tienen un Aquilion de Canon y un Ingenia de Philips, los dos se ven viejos.",
+		"gold": {
+			"cliente": "Centro Médico Paitilla",
+			"ciudad": null,
+			"pais": null,
+			"equipos": [
+				{
+					"modalidad": "Tomografía",
+					"cantidad": 1,
+					"marca": "Canon",
+					"modelo": "Aquilion",
+					"antiguedad_anios": null,
+					"estado": "Estimado"
+				},
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 1,
+					"marca": "Philips",
+					"modelo": "Ingenia",
+					"antiguedad_anios": null,
+					"estado": "Estimado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e4",
+		"text": "Hospital Santo Tomás, ciudad de Panamá. Hay tres equipos de rayos X portátiles, no vi la marca.",
+		"gold": {
+			"cliente": "Hospital Santo Tomás",
+			"ciudad": "Panamá",
+			"pais": "Panamá",
+			"equipos": [
+				{
+					"modalidad": "Rayos X",
+					"cantidad": 3,
+					"marca": null,
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e5",
+		"text": "Clínica Hospital San Fernando en Panamá. Tienen un mamógrafo Hologic de hace como diez años y quieren cambiarlo.",
+		"gold": {
+			"cliente": "Clínica Hospital San Fernando",
+			"ciudad": null,
+			"pais": "Panamá",
+			"equipos": [
+				{
+					"modalidad": "Mamografía",
+					"cantidad": 1,
+					"marca": "Hologic",
+					"modelo": null,
+					"antiguedad_anios": 10,
+					"estado": "Estimado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e6",
+		"text": "Hospital Alemán Oswaldo Cruz, São Paulo, Brasil. Según la ingeniera biomédica tienen cuatro resonadores, dos Siemens Magnetom y dos GE, todos de menos de cinco años.",
+		"gold": {
+			"cliente": "Hospital Alemán Oswaldo Cruz",
+			"ciudad": "São Paulo",
+			"pais": "Brasil",
+			"equipos": [
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 2,
+					"marca": "Siemens",
+					"modelo": "Magnetom",
+					"antiguedad_anios": null,
+					"estado": "Reportado"
+				},
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 2,
+					"marca": "GE",
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Reportado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e7",
+		"text": "Vi un angiógrafo Philips Azurion en la sala de hemodinamia del Hospital Punta Pacífica.",
+		"gold": {
+			"cliente": "Hospital Punta Pacífica",
+			"ciudad": null,
+			"pais": null,
+			"equipos": [
+				{
+					"modalidad": "Angiografía",
+					"cantidad": 1,
+					"marca": "Philips",
+					"modelo": "Azurion",
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e8",
+		"text": "En el Hospital Regional de David, Chiriquí, hay un tomógrafo de dieciséis cortes, creo que Toshiba, más o menos de 2012.",
+		"gold": {
+			"cliente": "Hospital Regional de David",
+			"ciudad": "David",
+			"pais": null,
+			"equipos": [
+				{
+					"modalidad": "Tomografía",
+					"cantidad": 1,
+					"marca": "Toshiba",
+					"modelo": null,
+					"antiguedad_anios": 14,
+					"estado": "Estimado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e9",
+		"text": "Clínica Las Condes en Santiago de Chile: una gammacámara GE Discovery y dos ecógrafos Philips EPIQ que compraron el año pasado.",
+		"gold": {
+			"cliente": "Clínica Las Condes",
+			"ciudad": "Santiago",
+			"pais": "Chile",
+			"equipos": [
+				{
+					"modalidad": "Medicina nuclear",
+					"cantidad": 1,
+					"marca": "GE",
+					"modelo": "Discovery",
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				},
+				{
+					"modalidad": "Ultrasonido",
+					"cantidad": 2,
+					"marca": "Philips",
+					"modelo": "EPIQ",
+					"antiguedad_anios": 1,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e10",
+		"text": "Hospital Metropolitano de Quito, Ecuador. Me contaron que tienen un resonador pero no pude entrar a verlo.",
+		"gold": {
+			"cliente": "Hospital Metropolitano",
+			"ciudad": "Quito",
+			"pais": "Ecuador",
+			"equipos": [
+				{
+					"modalidad": "Resonancia magnética",
+					"cantidad": 1,
+					"marca": null,
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Reportado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e11",
+		"text": "Centro de Imágenes Diagnósticas en Guatemala. Tienen un tomógrafo Siemens Somatom de unos seis años y un equipo de rayos X Fujifilm.",
+		"gold": {
+			"cliente": "Centro de Imágenes Diagnósticas",
+			"ciudad": null,
+			"pais": "Guatemala",
+			"equipos": [
+				{
+					"modalidad": "Tomografía",
+					"cantidad": 1,
+					"marca": "Siemens",
+					"modelo": "Somatom",
+					"antiguedad_anios": 6,
+					"estado": "Estimado"
+				},
+				{
+					"modalidad": "Rayos X",
+					"cantidad": 1,
+					"marca": "Fujifilm",
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	},
+	{
+		"id": "e12",
+		"text": "Hospital Nacional en San Salvador, El Salvador. Cinco ecógrafos, marcas distintas, no pude ver bien los modelos.",
+		"gold": {
+			"cliente": "Hospital Nacional",
+			"ciudad": "San Salvador",
+			"pais": "El Salvador",
+			"equipos": [
+				{
+					"modalidad": "Ultrasonido",
+					"cantidad": 5,
+					"marca": null,
+					"modelo": null,
+					"antiguedad_anios": null,
+					"estado": "Confirmado"
+				}
+			]
+		}
+	}
+]
