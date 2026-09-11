@@ -43,14 +43,14 @@ Hoja generada: **Movimientos**
 
 ### Salud (MedPsy 1.7B)
 
-Texto: "Centro de Imágenes Diagnósticas en Guatemala. Tienen un tomógrafo Siemens Somatom de unos seis años y un equipo de rayos X Fujifilm."
+Texto: "Centro de Imágenes Diagnósticas en Guatemala. Tienen un tomógrafo Siemens Somatom de unos seis años y un equipo de rayos X Phillips."
 
 Hoja generada: **Centro de Imágenes Diagnósticas en Guatemala**
 
 | Cliente | Modalidad | Cantidad | Marca | Antigüedad | Estado |
 | --- | --- | --- | --- | --- | --- |
-| Centro de Imágenes Diagnósticas en Guatemala | Tomografía | 1 | Siemens | 6 | Estimado |
-| Centro de Imágenes Diagnósticas en Guatemala | Radiografía | 1 | Fujifilm | 1 | Estimado |
+| Centro de Imágenes Diagnósticas en Guatemala | Tomografía | 1 | Phillips | 6 | Estimado |
+| Centro de Imágenes Diagnósticas en Guatemala | Radiografía | 1 | Phillips | 1 | Estimado |
 
 ## Sin nube
 
