@@ -26,6 +26,9 @@ const TODAY = new Date(NOW);
 const BRIEF =
 	"Estoy en Hospital DemoCare Pacific, en Panamá. Vi dos resonadores Philips y un tomógrafo. Uno de los resonadores parece de unos ocho años.";
 
+const caseText = (id: string) =>
+	cases.find((entry) => entry.id === id)?.text ?? "";
+
 const unit = (overrides: Partial<ExtractedUnit> = {}): ExtractedUnit => ({
 	modalidad: "Resonancia magnética",
 	cantidad: 1,
@@ -233,7 +236,9 @@ describe("assembleEquipos", () => {
 			extraction({ equipos: [unit({ cantidad: 2, modelo: "Achieva" })] }),
 		);
 		expect(assembleEquipos(BRIEF, modelText, TODAY)).toEqual({
-			extraction: extraction({ equipos: [unit({ cantidad: 2 })] }),
+			extraction: extraction({
+				equipos: [unit({ cantidad: 2, estado: "Estimado" })],
+			}),
 			unverified: ["equipos.0.modelo"],
 		});
 	});
@@ -260,8 +265,9 @@ describe("assembleEquipos", () => {
 				TODAY,
 			);
 		expect(aged(11).extraction?.equipos[0]?.antiguedad_anios).toBe(11);
+		expect(aged(12).extraction?.equipos[0]?.antiguedad_anios).toBe(11);
 		expect(aged(2015).unverified).toEqual(["equipos.0.antiguedad_anios"]);
-		expect(aged(12).unverified).toEqual(["equipos.0.antiguedad_anios"]);
+		expect(aged(13).unverified).toEqual(["equipos.0.antiguedad_anios"]);
 	});
 
 	test("grounds a quantity in a Spanish number word", () => {
@@ -326,6 +332,93 @@ describe("assembleEquipos", () => {
 			},
 			unverified: ["cliente", "equipos.0.modelo"],
 		});
+	});
+
+	test("MedPsy e1: the country filed as the city moves to pais and the aged resonator is Estimado", () => {
+		const raw =
+			'{"cliente":"Hospital DemoCare Pacific","ciudad":"Panamá","pais":null,"equipos":[{"modalidad":"Resonancia magnética","cantidad":2,"marca":"Philips","modelo":"Aquilion","antiguedad_anios":8,"estado":"Confirmado"},{"modalidad":"Tomografía","cantidad":1,"marca":"Siemens","modelo":"Somatom","antiguedad_anios":null,"estado":"Reportado"}] }';
+		expect(assembleEquipos(caseText("e1"), raw, TODAY)).toEqual({
+			extraction: extraction({
+				ciudad: null,
+				pais: "Panamá",
+				equipos: [
+					unit({ cantidad: 2, antiguedad_anios: 8, estado: "Estimado" }),
+					unit({ modalidad: "Tomografía", marca: null, estado: "Reportado" }),
+				],
+			}),
+			unverified: ["equipos.0.modelo", "equipos.1.marca", "equipos.1.modelo"],
+		});
+	});
+
+	test("MedPsy e2: pais comes from the text, age 10 snaps to 2015's 11 and me dijo reports the tomógrafo", () => {
+		const raw =
+			'{"cliente":"Clínica San Rafael de Medellín","ciudad":"Medellín","pais":null,"equipos":[{"modalidad":"Ultrasonido","cantidad":1,"marca":"GE","modelo":"Logiq E10","antiguedad_anios":7,"estado":"Confirmado"},{"modalidad":"Tomografía","cantidad":1,"marca":"Siemens","modelo":"Somatom CT 160","antiguedad_anios":10,"estado":"Reportado"}] }';
+		const expected = {
+			extraction: {
+				cliente: "Clínica San Rafael de Medellín",
+				ciudad: "Medellín",
+				pais: "Colombia",
+				equipos: [
+					unit({ modalidad: "Ultrasonido", marca: "GE", modelo: "Logiq E10" }),
+					unit({
+						modalidad: "Tomografía",
+						marca: "Siemens",
+						antiguedad_anios: 11,
+						estado: "Reportado",
+					}),
+				],
+			},
+			unverified: ["equipos.0.antiguedad_anios", "equipos.1.modelo"],
+		};
+		expect(assembleEquipos(caseText("e2"), raw, TODAY)).toEqual(expected);
+		expect(
+			assembleEquipos(
+				caseText("e2"),
+				raw.replace('"estado":"Reportado"', '"estado":"Confirmado"'),
+				TODAY,
+			),
+		).toEqual(expected);
+	});
+
+	test("ciudad de Panamá keeps Panamá as both city and country", () => {
+		const text =
+			"Centro Médico Paitilla, ciudad de Panamá. Tienen un resonador Siemens.";
+		const modelText = JSON.stringify(
+			extraction({
+				cliente: "Centro Médico Paitilla",
+				ciudad: "Panamá",
+				pais: null,
+				equipos: [unit({ marca: "Siemens" })],
+			}),
+		);
+		expect(assembleEquipos(text, modelText, TODAY).extraction).toMatchObject({
+			ciudad: "Panamá",
+			pais: "Panamá",
+		});
+	});
+
+	test("with two years an age snaps only to the year in its unit's sentence", () => {
+		const text =
+			"En la Clínica San Rafael el tomógrafo Siemens es de 2015. El ecógrafo GE es de 2020.";
+		const modelText = JSON.stringify(
+			extraction({
+				cliente: "Clínica San Rafael",
+				pais: null,
+				equipos: [
+					unit({
+						modalidad: "Tomografía",
+						marca: "Siemens",
+						antiguedad_anios: 7,
+					}),
+					unit({ modalidad: "Ultrasonido", marca: "GE", antiguedad_anios: 5 }),
+				],
+			}),
+		);
+		expect(
+			assembleEquipos(text, modelText, TODAY).extraction?.equipos.map(
+				(found) => found.antiguedad_anios,
+			),
+		).toEqual([null, 6]);
 	});
 
 	test("returns no extraction when nothing grounded survives", () => {

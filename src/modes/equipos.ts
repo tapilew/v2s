@@ -371,6 +371,129 @@ const modalitySaid = (modality: Modality, said: Evidence) =>
 	(MODALITY_WORDS[modality]?.test(said.text) ?? false) ||
 	linesSaid(modality, said).length > 0;
 
+const COUNTRIES = [
+	"Panamá",
+	"Colombia",
+	"Costa Rica",
+	"Guatemala",
+	"El Salvador",
+	"Honduras",
+	"Nicaragua",
+	"México",
+	"República Dominicana",
+	"Ecuador",
+	"Perú",
+	"Chile",
+	"Argentina",
+	"Brasil",
+	"Venezuela",
+	"Uruguay",
+	"Paraguay",
+	"Bolivia",
+];
+
+// Estimado is checked first: "me dijeron que parece de unos ocho años" is still a guess.
+const CLAUSE_STATUS: ReadonlyArray<{
+	status: Status;
+	phrases: readonly string[];
+}> = [
+	{
+		status: "Estimado",
+		phrases: [
+			"parece",
+			"unos",
+			"unas",
+			"creo",
+			"aproximadamente",
+			"más o menos",
+			"como de",
+			"alrededor de",
+		],
+	},
+	{
+		status: "Reportado",
+		phrases: [
+			"me dijo",
+			"me dijeron",
+			"me contó",
+			"me contaron",
+			"según",
+			"reportó",
+		],
+	},
+];
+
+const saysPhrase = (text: string, phrase: string) =>
+	` ${text} `.includes(` ${normalize(phrase)} `);
+
+// Models file the country as the city; only "ciudad de Panamá" makes Panamá both.
+const locate = (
+	{ ciudad, pais }: Pick<Extraction, "ciudad" | "pais">,
+	said: Evidence,
+) => {
+	const countries = COUNTRIES.filter((country) =>
+		saysPhrase(said.text, country),
+	);
+	const cityCountry = COUNTRIES.find(
+		(country) =>
+			ciudad !== null &&
+			normalize(ciudad) === normalize(country) &&
+			!saysPhrase(said.text, `ciudad de ${country}`),
+	);
+	return {
+		ciudad: cityCountry === undefined ? ciudad : null,
+		pais: pais ?? cityCountry ?? (countries.length === 1 ? countries[0] : null),
+	};
+};
+
+// Normalizing erases punctuation, so sentences split first; " y " then gives "un ecógrafo y me dijo que el tomógrafo" one clause per unit.
+const sentencesOf = (source: string, now: Date) =>
+	source
+		.split(/[.;!?](?=\s|$)/)
+		.map((sentence) => evidenceOf(sentence, now))
+		.filter((sentence) => sentence.text !== "");
+
+const clausesOf = (sentence: Evidence, now: Date) =>
+	sentence.text.split(" y ").map((clause) => evidenceOf(clause, now));
+
+// A model that subtracts from a said year lands one off; the year counts only if it is the text's only year or shares the unit's sentence.
+const snapAge = (
+	unit: ExtractedUnit,
+	said: Evidence,
+	sentences: readonly Evidence[],
+) => {
+	const age = unit.antiguedad_anios;
+	if (age === null || said.numbers.has(age) || said.yearsAgo.has(age))
+		return age;
+	const years =
+		said.yearsAgo.size === 1
+			? [...said.yearsAgo]
+			: sentences
+					.filter((sentence) => modalitySaid(unit.modalidad, sentence))
+					.flatMap((sentence) => [...sentence.yearsAgo]);
+	return years.find((year) => Math.abs(year - age) <= 1) ?? age;
+};
+
+const statesAge = (unit: ExtractedUnit, clause: Evidence) =>
+	unit.antiguedad_anios !== null &&
+	(clause.numbers.has(unit.antiguedad_anios) ||
+		clause.yearsAgo.has(unit.antiguedad_anios));
+
+// When the visit has several units of one modality, a hedge marks only the unit whose age the clause states.
+const statusSaid = (
+	unit: ExtractedUnit,
+	clauses: readonly Evidence[],
+	shared: boolean,
+): Status =>
+	CLAUSE_STATUS.find(({ status, phrases }) =>
+		clauses.some(
+			(clause) =>
+				modalitySaid(unit.modalidad, clause) &&
+				phrases.some((phrase) => saysPhrase(clause.text, phrase)) &&
+				(status !== "Estimado" || !shared || statesAge(unit, clause)),
+		),
+	)?.status ?? unit.estado;
+
 export const groundExtraction = (
 	extraction: Extraction,
 	source: string,
@@ -387,17 +510,20 @@ export const groundExtraction = (
 		unverified.push(path);
 		return null;
 	};
+	const located = { ...extraction, ...locate(extraction, said) };
 	const place = (path: "cliente" | "ciudad" | "pais") =>
-		keep(path, extraction[path], (value) => recalled(value, said));
+		keep(path, located[path], (value) => recalled(value, said));
 	const cliente = place("cliente");
 	const ciudad = place("ciudad");
 	const pais = place("pais");
+	const sentences = sentencesOf(source, now);
+	const clauses = sentences.flatMap((sentence) => clausesOf(sentence, now));
 	const equipos = extraction.equipos
 		.filter((unit) => modalitySaid(unit.modalidad, said))
-		.map((unit, index) => {
+		.map((unit, index, kept) => {
 			const at = `equipos.${index}`;
 			const lines = linesSaid(unit.modalidad, said);
-			return {
+			const checked: ExtractedUnit = {
 				...unit,
 				cantidad: keep(`${at}.cantidad`, unit.cantidad, (count) =>
 					said.numbers.has(count),
@@ -414,10 +540,13 @@ export const groundExtraction = (
 				),
 				antiguedad_anios: keep(
 					`${at}.antiguedad_anios`,
-					unit.antiguedad_anios,
+					snapAge(unit, said, sentences),
 					(age) => said.numbers.has(age) || said.yearsAgo.has(age),
 				),
 			};
+			const shared =
+				kept.filter((other) => other.modalidad === unit.modalidad).length > 1;
+			return { ...checked, estado: statusSaid(checked, clauses, shared) };
 		});
 	const grounded = { cliente, ciudad, pais, equipos };
 	return usable(grounded)
