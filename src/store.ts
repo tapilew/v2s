@@ -1,82 +1,35 @@
 import { File, Paths } from "expo-file-system";
-import {
-	type Consultation,
-	type NoteEdit,
-	type NoteStatus,
-	noteFrom,
-	type Physician,
-} from "./clinical-note";
+import { isRecord, type LooseRecord } from "./sheet";
 
-export type StoreRead =
-	| { kind: "ok"; consultations: Consultation[] }
+export type RecordsRead =
+	| { kind: "ok"; records: LooseRecord[] }
 	| { kind: "absent" }
 	| { kind: "quarantined" };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isNumber = (value: unknown): value is number =>
-	typeof value === "number" && Number.isFinite(value);
-
-const filled = (value: unknown) =>
-	typeof value === "string" && value.trim() !== "" ? value.trim() : null;
-
-export const physicianFrom = (value: unknown): Physician | null => {
+const recordFrom = (value: unknown): LooseRecord | null => {
 	if (!isRecord(value)) return null;
-	const name = filled(value.name);
-	const license = filled(value.license);
-	return name && license ? { name, license } : null;
-};
-
-// A damaged signature reopens the note as a draft: a second review is safe, a note wrongly shown as signed is not.
-const statusFrom = (value: unknown): NoteStatus => {
-	if (!isRecord(value) || value.kind !== "signed" || !isNumber(value.at))
-		return { kind: "draft" };
-	const physician = physicianFrom(value.physician);
-	return physician
-		? { kind: "signed", at: value.at, physician }
-		: { kind: "draft" };
-};
-
-const editFrom = (value: unknown): NoteEdit | null => {
-	if (!isRecord(value) || !isNumber(value.at) || typeof value.path !== "string")
-		return null;
-	const text = (field: unknown) => (typeof field === "string" ? field : null);
-	return {
-		at: value.at,
-		path: value.path,
-		before: text(value.before),
-		after: text(value.after),
-		afterSigning: value.afterSigning === true,
-	};
-};
-
-const consultationFrom = (value: unknown): Consultation | null => {
-	if (!isRecord(value)) return null;
-	const { id, at, transcript, edits, unverified } = value;
-	if (typeof id !== "string" || typeof transcript !== "string" || !isNumber(at))
+	const { id, at, source, extraction, unverified } = value;
+	if (
+		typeof id !== "string" ||
+		typeof source !== "string" ||
+		typeof at !== "number" ||
+		!Number.isFinite(at)
+	)
 		return null;
 	return {
 		id,
 		at,
-		transcript,
-		note: noteFrom(value.note),
-		status: statusFrom(value.status),
-		edits: Array.isArray(edits)
-			? edits.flatMap((raw) => {
-					const edit = editFrom(raw);
-					return edit ? [edit] : [];
-				})
-			: [],
+		source,
+		extraction: extraction ?? null,
 		unverified: Array.isArray(unverified)
-			? unverified.filter((flag): flag is string => typeof flag === "string")
+			? unverified.filter((path): path is string => typeof path === "string")
 			: [],
 	};
 };
 
-export const parseConsultations = (
+export const parseRecords = (
 	text: string,
-): { consultations: Consultation[]; dropped: number } | null => {
+): { records: LooseRecord[]; dropped: number } | null => {
 	let raw: unknown;
 	try {
 		raw = JSON.parse(text);
@@ -84,32 +37,26 @@ export const parseConsultations = (
 		return null;
 	}
 	if (!Array.isArray(raw)) return null;
-	const consultations = raw
-		.map(consultationFrom)
-		.filter((found): found is Consultation => found !== null);
-	return { consultations, dropped: raw.length - consultations.length };
+	const records = raw
+		.map(recordFrom)
+		.filter((found): found is LooseRecord => found !== null);
+	return { records, dropped: raw.length - records.length };
 };
 
-const documentFile = (name: string) => new File(Paths.document, `${name}.json`);
+const documentFile = (name: string) => new File(Paths.document, name);
 
 const replaceFile = (name: string, text: string) => {
-	const next = new File(Paths.document, `${name}.tmp.json`);
+	const next = documentFile(`${name}.tmp`);
 	if (next.exists) next.delete();
 	next.create();
 	next.write(text);
 	next.moveSync(documentFile(name), { overwrite: true });
 };
 
-export const openStore = (name: string) => {
+export const openRecordStore = (base: string) => {
+	const name = `${base}.json`;
 	const aside = (label: string) =>
-		new File(Paths.document, `${name}.${label}-${Date.now()}.json`);
-
-	const discardTemp = () => {
-		try {
-			const stale = new File(Paths.document, `${name}.tmp.json`);
-			if (stale.exists) stale.delete();
-		} catch {}
-	};
+		documentFile(`${base}.${label}-${Date.now()}.json`);
 
 	const quarantine = () => {
 		try {
@@ -117,7 +64,7 @@ export const openStore = (name: string) => {
 		} catch {}
 	};
 
-	// The next save rewrites the file without the dropped entries, so the original text stays beside it.
+	// The next save rewrites the file without the dropped records, so the original text stays beside it.
 	const keepOriginal = (text: string) => {
 		try {
 			const copy = aside("salvaged");
@@ -127,38 +74,48 @@ export const openStore = (name: string) => {
 	};
 
 	return {
-		load: (): StoreRead => {
-			discardTemp();
+		load: (): RecordsRead => {
+			try {
+				const stale = documentFile(`${name}.tmp`);
+				if (stale.exists) stale.delete();
+			} catch {}
 			let text: string;
 			try {
-				const current = documentFile(name);
-				if (!current.exists) return { kind: "absent" };
-				text = current.textSync();
+				const file = documentFile(name);
+				if (!file.exists) return { kind: "absent" };
+				text = file.textSync();
 			} catch {
 				quarantine();
 				return { kind: "quarantined" };
 			}
-			const parsed = parseConsultations(text);
+			const parsed = parseRecords(text);
 			if (!parsed) {
 				quarantine();
 				return { kind: "quarantined" };
 			}
 			if (parsed.dropped > 0) keepOriginal(text);
-			return { kind: "ok", consultations: parsed.consultations };
+			return { kind: "ok", records: parsed.records };
 		},
-		save: (consultations: readonly Consultation[]) =>
-			replaceFile(name, JSON.stringify(consultations)),
+		save: (records: readonly LooseRecord[]) =>
+			replaceFile(name, JSON.stringify(records)),
 	};
 };
 
-export const openPhysicianProfile = (name: string) => ({
-	load: (): Physician | null => {
-		try {
-			const file = documentFile(name);
-			return file.exists ? physicianFrom(JSON.parse(file.textSync())) : null;
-		} catch {
-			return null;
-		}
-	},
-	save: (physician: Physician) => replaceFile(name, JSON.stringify(physician)),
-});
+export const openTextStore = (base: string) => {
+	const name = `${base}.txt`;
+	return {
+		load: (): string => {
+			try {
+				const file = documentFile(name);
+				return file.exists ? file.textSync() : "";
+			} catch {
+				return "";
+			}
+		},
+		save: (text: string) => {
+			try {
+				replaceFile(name, text);
+			} catch {}
+		},
+	};
+};

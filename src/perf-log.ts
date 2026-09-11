@@ -1,6 +1,5 @@
 import * as Device from "expo-device";
 import { File, Paths } from "expo-file-system";
-import type { ModelRole } from "./models";
 
 export const DEVICE = {
 	modelName: Device.modelName,
@@ -11,13 +10,20 @@ export const DEVICE = {
 export type PerfEntry =
 	| {
 			event: "load";
-			role: ModelRole;
 			model: string;
 			quantization: string;
 			ms: number;
 			device: typeof DEVICE;
 	  }
-	| { event: "transcribe"; model: string; ms: number; chars: number }
+	| { event: "unload"; model: string }
+	| {
+			event: "transcribe";
+			model: string;
+			quantization: string;
+			ms: number;
+			chars: number;
+			device: typeof DEVICE;
+	  }
 	| {
 			event: "extract";
 			model: string;
@@ -31,6 +37,7 @@ export type PerfEntry =
 			backendDevice: string | null;
 			ms: number;
 			parsed: boolean;
+			device: typeof DEVICE;
 	  };
 
 export const perfLogFile = () => new File(Paths.document, "perf-log.jsonl");
