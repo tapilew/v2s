@@ -54,7 +54,7 @@ export type ModeRules = {
 		newRowsText: string;
 		updateSentence: string;
 		updateListText: string;
-		updateRow: Record<string, Cell>;
+		updateRows: Record<string, Cell>[];
 	};
 };
 
@@ -62,6 +62,8 @@ export type Harness = ModeRules & { id: ModeId; extractor: ModelSpec };
 
 export const MAX_COLUMNS = 8;
 export const MAX_ITEMS = 12;
+export const ROW_SLACK = 3;
+export const MAX_SCHEMA_ROWS = 15;
 export const MAX_ROWS = 20;
 
 const text = (maxLength: number) => ({ type: "string", maxLength });
@@ -73,6 +75,12 @@ export const LIST_SCHEMA = {
 	},
 	required: ["elementos"],
 };
+
+// A list element may fold two things ("dos resonadores y un tomógrafo"), so the model may emit a few extra rows.
+const rowRange = (n: number) => ({
+	minItems: n,
+	maxItems: Math.min(MAX_SCHEMA_ROWS, n + ROW_SLACK),
+});
 
 export const newSchema = (n: number) => ({
 	type: "object",
@@ -86,8 +94,7 @@ export const newSchema = (n: number) => ({
 		},
 		filas: {
 			type: "array",
-			minItems: n,
-			maxItems: n,
+			...rowRange(n),
 			items: {
 				type: "array",
 				minItems: 2,
@@ -104,8 +111,7 @@ export const updateSchema = (n: number, width: number) => ({
 	properties: {
 		filas: {
 			type: "array",
-			minItems: n,
-			maxItems: n,
+			...rowRange(n),
 			items: {
 				type: "array",
 				minItems: width,
@@ -322,10 +328,11 @@ const isSupported = (
 		return textSupports(cell, folded);
 	});
 
-const flagAll = (row: DraftRow): DraftRow => ({
+// Unverified means "a number the text never said", so only numeric cells carry the flag.
+const flagNumbers = (row: DraftRow): DraftRow => ({
 	...row,
 	unverified: row.cells.flatMap((cell, index) =>
-		cell === null ? [] : [index],
+		typeof cell === "number" ? [index] : [],
 	),
 });
 
@@ -366,7 +373,7 @@ export const assemble = (
 	const supported = grounded.filter((row) =>
 		isSupported(row, shared, grounding.folded),
 	);
-	const rows = supported.length > 0 ? supported : [flagAll(grounded[0])];
+	const rows = supported.length > 0 ? supported : [flagNumbers(grounded[0])];
 	const title =
 		typeof parsed.titulo === "string" ? parsed.titulo.trim().slice(0, 40) : "";
 	return { title: columns ? null : title || null, columns: named, rows };
@@ -415,12 +422,14 @@ export const demoListText = (mode: ModeId, columns: string[] | null) =>
 export const demoRowsText = (mode: ModeId, columns: string[] | null) => {
 	const { demo } = HARNESS[mode];
 	if (columns === null) return demo.newRowsText;
-	const byName = new Map(
-		Object.entries(demo.updateRow).map(([key, value]) => [
-			foldName(key),
-			cellString(value),
-		]),
-	);
-	const row = columns.map((column) => byName.get(foldName(column)) ?? "");
-	return JSON.stringify({ filas: [row] });
+	const filas = demo.updateRows.map((row) => {
+		const byName = new Map(
+			Object.entries(row).map(([key, value]) => [
+				foldName(key),
+				cellString(value),
+			]),
+		);
+		return columns.map((column) => byName.get(foldName(column)) ?? "");
+	});
+	return JSON.stringify({ filas });
 };

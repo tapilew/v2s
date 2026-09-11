@@ -27,9 +27,10 @@ export const createDemoEngine = (): Engine => {
 		},
 		loaded: () => [],
 		release: async () => {},
-		async transcribe(_, mode) {
+		async transcribe(_, mode, appending) {
 			await wait(600);
-			return HARNESS[mode].demo.sentence;
+			const { demo } = HARNESS[mode];
+			return appending ? demo.updateSentence : demo.sentence;
 		},
 		async generate(mode, job) {
 			await wait(300);

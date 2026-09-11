@@ -33,7 +33,17 @@ export type Pending = { id: string; at: number; text: string; target: Target };
 
 export type Library = { sheets: Sheet[]; pending: Pending[] };
 
-export type Summary = { rows: number; totals: (number | null)[] };
+export type TypeTotals = { Ingreso: number; Gasto: number; Ahorro: number };
+
+export type Summary = {
+	rows: number;
+	totals: (number | null)[];
+	byType: { column: number; totals: TypeTotals } | null;
+};
+
+const MONEY_COLUMN = /monto|total|precio|importe|valor|cantidad/i;
+
+export const TYPES = ["Ingreso", "Gasto", "Ahorro"] as const;
 
 export const EMPTY_LIBRARY: Library = { sheets: [], pending: [] };
 
@@ -157,21 +167,50 @@ export const removeSource = (
 	updatedAt: now,
 });
 
-export const sheetSummary = (sheet: Sheet): Summary => ({
-	rows: sheet.rows.length,
-	totals: sheet.columns.map((_, column) => {
-		const values = sheet.rows
-			.map((row) => row.cells[column] ?? null)
-			.filter((cell): cell is Exclude<Cell, null> => cell !== null);
+const columnValues = (sheet: Sheet, column: number) =>
+	sheet.rows
+		.map((row) => row.cells[column] ?? null)
+		.filter((cell): cell is Exclude<Cell, null> => cell !== null);
+
+const round = (value: number) => Math.round(value * 100) / 100;
+
+// Only money-like columns get a total; a Tipo column splits the first one by Ingreso, Gasto and Ahorro.
+export const sheetSummary = (sheet: Sheet): Summary => {
+	const totals = sheet.columns.map((name, column) => {
+		if (!MONEY_COLUMN.test(name)) return null;
+		const values = columnValues(sheet, column);
 		if (
 			values.length === 0 ||
 			!values.every((cell) => typeof cell === "number")
 		)
 			return null;
-		const total = values.reduce<number>((sum, cell) => sum + Number(cell), 0);
-		return Math.round(total * 100) / 100;
-	}),
-});
+		return round(values.reduce<number>((sum, cell) => sum + Number(cell), 0));
+	});
+	const money = totals.findIndex((total) => total !== null);
+	const type = sheet.columns.findIndex((_, column) => {
+		const values = columnValues(sheet, column);
+		return (
+			values.length > 0 &&
+			values.every((cell) => TYPES.some((known) => known === cell))
+		);
+	});
+	if (money === -1 || type === -1)
+		return { rows: sheet.rows.length, totals, byType: null };
+	const byType: TypeTotals = { Ingreso: 0, Gasto: 0, Ahorro: 0 };
+	for (const row of sheet.rows) {
+		const kind = row.cells[type];
+		const amount = row.cells[money];
+		if (typeof amount === "number" && TYPES.some((known) => known === kind))
+			byType[kind as keyof TypeTotals] = round(
+				byType[kind as keyof TypeTotals] + amount,
+			);
+	}
+	return {
+		rows: sheet.rows.length,
+		totals,
+		byType: { column: money, totals: byType },
+	};
+};
 
 const csvField = (value: Cell) => {
 	const text = cellText(value);

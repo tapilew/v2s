@@ -122,9 +122,42 @@ describe("sheet operations", () => {
 			second,
 			1,
 		);
-		expect(sheetSummary(sheet)).toEqual({ rows: 3, totals: [null, null, 57] });
+		expect(sheetSummary(sheet)).toEqual({
+			rows: 3,
+			totals: [null, null, 57],
+			byType: null,
+		});
 		const mixed = editCell(sheet, sheet.rows[0].id, 2, "unos 45", 2);
 		expect(sheetSummary(mixed).totals[2]).toBeNull();
+	});
+
+	test("sheetSummary skips year-like columns and splits money by Tipo", () => {
+		const sheet = createSheet(
+			"finanzas",
+			"M",
+			["Concepto", "Tipo", "Monto", "Año"],
+			[
+				{ cells: ["Luz", "Gasto", 45, 2026], unverified: [] },
+				{ cells: ["Almuerzo", "Gasto", 12, 2026], unverified: [] },
+				{ cells: ["Quincena", "Ingreso", 850, 2026], unverified: [] },
+			],
+			first,
+			1,
+		);
+		expect(sheetSummary(sheet)).toEqual({
+			rows: 3,
+			totals: [null, null, 907, null],
+			byType: { column: 2, totals: { Ingreso: 850, Gasto: 57, Ahorro: 0 } },
+		});
+		const equipment = createSheet(
+			"salud",
+			"E",
+			["Modalidad", "Cantidad", "Antigüedad"],
+			[{ cells: ["Tomografía", 2, 8], unverified: [] }],
+			first,
+			1,
+		);
+		expect(sheetSummary(equipment).totals).toEqual([null, 2, null]);
 	});
 
 	test("toCsv writes a BOM, CRLF lines and quotes only when needed", () => {

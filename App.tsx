@@ -64,8 +64,10 @@ import {
 	removeRow,
 	renameSheet,
 	type Sheet,
+	type Summary,
 	sheetSummary,
 	type Target,
+	TYPES,
 	toCsv,
 } from "./src/spreadsheet";
 import { openLibraryStore, openTextStore } from "./src/store";
@@ -129,8 +131,9 @@ const ACCENT = "#B8F56F";
 const INK = "#122014";
 const METER_BARS = 9;
 const MAX_RECORDING_SECONDS = 600;
-const MIN_COLUMN = 96;
-const MAX_COLUMN = 220;
+const MIN_COLUMN = 88;
+const MAX_COLUMN = 150;
+const MEASURED_CHARS = 18;
 
 const LOCKED_PHASES: ReadonlySet<Capture["kind"]> = new Set([
 	"starting",
@@ -268,13 +271,26 @@ const deviceLine = () =>
 		.filter(Boolean)
 		.join(" · ");
 
+const footerCell = (summary: Summary, index: number) => {
+	if (summary.byType?.column === index)
+		return TYPES.flatMap((type) => {
+			const total = summary.byType?.totals[type] ?? 0;
+			if (total === 0) return [];
+			const label = type === "Ahorro" ? "Ahorro" : `${type}s`;
+			return [`${label} ${formatNumber(total)}`];
+		}).join(" · ");
+	const total = summary.totals[index];
+	return total === null ? "" : formatNumber(total);
+};
+
 const columnWidths = (sheet: Sheet) =>
 	sheet.columns.map((column, index) => {
 		const longest = sheet.rows.reduce(
 			(max, row) => Math.max(max, cellText(row.cells[index]).length),
 			column.length,
 		);
-		return Math.min(MAX_COLUMN, Math.max(MIN_COLUMN, longest * 7.5 + 28));
+		const chars = Math.min(MEASURED_CHARS, longest);
+		return Math.min(MAX_COLUMN, Math.max(MIN_COLUMN, chars * 7.5 + 28));
 	});
 
 type PressableBoxProps = Omit<PressableProps, "style" | "children"> & {
@@ -786,7 +802,11 @@ function Table({
 								delayLongPress={350}
 								key={row.id}
 								onLongPress={() => onRowMenu(row)}
-								style={[styles.tr, rowIndex % 2 === 1 && styles.trZebra]}
+								style={[
+									styles.tr,
+									rowIndex % 2 === 1 && styles.trZebra,
+									row.unverified.length > 0 && styles.trFlagged,
+								]}
 							>
 								{row.cells.map((cell, column) => {
 									const active =
@@ -835,7 +855,7 @@ function Table({
 							<Text
 								// biome-ignore lint/suspicious/noArrayIndexKey: a column is its position; two columns may share a name.
 								key={`${index}-${column}`}
-								numberOfLines={1}
+								numberOfLines={3}
 								style={[
 									styles.tf,
 									{ width: widths[index] },
@@ -844,9 +864,7 @@ function Table({
 							>
 								{index === 0
 									? count(summary.rows, "fila", "filas")
-									: summary.totals[index] !== null
-										? formatNumber(summary.totals[index])
-										: ""}
+									: footerCell(summary, index)}
 							</Text>
 						))}
 					</View>
@@ -1374,7 +1392,9 @@ function Assistant() {
 				await recorder.stop();
 				audioPath = recorder.uri ? toLocalPath(recorder.uri) : null;
 			}
-			const heard = (await engine.transcribe(audioPath, id)).trim();
+			const heard = (
+				await engine.transcribe(audioPath, id, effectiveTarget !== "new")
+			).trim();
 			if (!alive.current) return;
 			if (!isMeaningfulTranscript(heard)) {
 				go({
@@ -2031,6 +2051,7 @@ const styles = StyleSheet.create({
 		flexDirection: "row",
 	},
 	trZebra: { backgroundColor: "#111816" },
+	trFlagged: { backgroundColor: "#171C12" },
 	td: { justifyContent: "center", minHeight: 44, paddingHorizontal: 10 },
 	tdText: { color: "#E3EEEA", fontSize: 14, lineHeight: 19 },
 	tdNumber: { fontVariant: ["tabular-nums"], textAlign: "right" },

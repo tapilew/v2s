@@ -183,14 +183,26 @@ describe("assemble", () => {
 		expect(result?.rows[0].unverified).toEqual([1]);
 	});
 
-	test("when no row has support, the first one stays and every cell is flagged", () => {
+	test("when no row has support, the first one stays with its numbers flagged", () => {
 		const result = assemble(
 			"nada que ver",
 			'{"titulo":"T","columnas":["A","B"],"filas":[["Inventado","7"],["Otro","9"]]}',
 			NOW,
 		);
 		expect(result?.rows).toHaveLength(1);
-		expect(result?.rows[0].unverified).toEqual([0, 1]);
+		expect(result?.rows[0].unverified).toEqual([1]);
+	});
+
+	test("a folded element can become two rows; padding beyond that is dropped", () => {
+		const result = assemble(
+			"Vi dos resonadores Philips y un tomógrafo.",
+			'{"titulo":"Equipos","columnas":["Modalidad","Cantidad","Marca"],"filas":[["Resonancia magnética","2","Philips"],["Tomografía","1",""],["Tomografía","1",""],["Mamografía","3",""]]}',
+			NOW,
+		);
+		expect(result?.rows.map((row) => row.cells[0])).toEqual([
+			"Resonancia magnética",
+			"Tomografía",
+		]);
 	});
 
 	test("tolerates prose around the JSON, pads and truncates rows", () => {
@@ -232,7 +244,7 @@ describe("requests", () => {
 			'Texto: "Pagué 10"\nElementos: ["Pagué 10","otro"]',
 		);
 		expect(rows.responseFormat.json_schema.schema).toMatchObject({
-			properties: { filas: { minItems: 2, maxItems: 2 } },
+			properties: { filas: { minItems: 2, maxItems: 5 } },
 		});
 		expect(rows.generationParams).toEqual({ temp: 0, predict: 500 });
 	});
@@ -257,7 +269,7 @@ describe("requests", () => {
 			properties: {
 				filas: {
 					minItems: 1,
-					maxItems: 1,
+					maxItems: 4,
 					items: { minItems: 2, maxItems: 2 },
 				},
 			},
@@ -268,7 +280,7 @@ describe("requests", () => {
 		const job = newSheetJob("finanzas", "x", NOW);
 		const rows = job.rows(Array.from({ length: 20 }, (_, i) => `e${i}`));
 		expect(rows.responseFormat.json_schema.schema).toMatchObject({
-			properties: { filas: { minItems: 12, maxItems: 12 } },
+			properties: { filas: { minItems: 12, maxItems: 15 } },
 		});
 	});
 });
@@ -289,8 +301,13 @@ describe("demo", () => {
 				NOW,
 				columns,
 			);
-			expect(grown?.rows[0].cells).toHaveLength(columns.length);
-			expect(grown?.rows[0].unverified).toEqual([]);
+			expect(grown?.rows).toHaveLength(2);
+			expect(
+				grown?.rows.every((row) => row.cells.length === columns.length),
+			).toBe(true);
+			expect(grown?.rows.every((row) => row.unverified.length === 0)).toBe(
+				true,
+			);
 		}
 	});
 });

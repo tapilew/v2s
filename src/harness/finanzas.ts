@@ -31,17 +31,27 @@ export const finanzas: Harness = {
 				["2026-09-10", "Quincena", "Ingreso", "850", ""],
 			],
 		}),
-		updateSentence: "Ayer pagué el internet, 35 dólares, con tarjeta.",
+		updateSentence: "Ayer pagué el internet, 35 dólares, y Netflix, 15.99.",
 		updateListText: JSON.stringify({
-			elementos: ["Ayer pagué el internet, 35 dólares, con tarjeta"],
+			elementos: ["Ayer pagué el internet, 35 dólares", "Netflix, 15.99"],
 		}),
-		updateRow: {
-			Fecha: "2026-09-09",
-			Concepto: "Internet",
-			Tipo: "Gasto",
-			Categoría: "Servicios",
-			Monto: 35,
-			Método: "Tarjeta",
-		},
+		updateRows: [
+			{
+				Fecha: "2026-09-09",
+				Concepto: "Internet",
+				Tipo: "Gasto",
+				Categoría: "Servicios",
+				Monto: 35,
+				Método: "",
+			},
+			{
+				Fecha: "2026-09-09",
+				Concepto: "Netflix",
+				Tipo: "Gasto",
+				Categoría: "Servicios",
+				Monto: 15.99,
+				Método: "",
+			},
+		],
 	},
 };

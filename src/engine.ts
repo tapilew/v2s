@@ -15,7 +15,11 @@ export type ModelProgress = (model: ModelSpec, percent: number) => void;
 export type Engine = {
 	prepare(mode: ModeId, onProgress: ModelProgress): Promise<void>;
 	loaded(): readonly string[];
-	transcribe(audioPath: string | null, mode: ModeId): Promise<string>;
+	transcribe(
+		audioPath: string | null,
+		mode: ModeId,
+		appending: boolean,
+	): Promise<string>;
 	generate(mode: ModeId, job: Job): Promise<Generated | null>;
 	release(): Promise<void>;
 };

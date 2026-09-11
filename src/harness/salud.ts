@@ -44,18 +44,27 @@ export const salud: Harness = {
 			],
 		}),
 		updateSentence:
-			"En la Clínica San Rafael de Medellín tienen un ecógrafo GE nuevo.",
+			"En la Clínica San Rafael de Medellín vi un ecógrafo GE Logiq nuevo y un tomógrafo Siemens de 2015.",
 		updateListText: JSON.stringify({
-			elementos: ["un ecógrafo GE nuevo en la Clínica San Rafael de Medellín"],
+			elementos: ["un ecógrafo GE Logiq nuevo", "un tomógrafo Siemens de 2015"],
 		}),
-		updateRow: {
-			Cliente: "Clínica San Rafael de Medellín",
-			Modalidad: "Ultrasonido",
-			Cantidad: 1,
-			Marca: "GE",
-			Antigüedad: "",
-			Estado: "Nuevo",
-			Paciente: "",
-		},
+		updateRows: [
+			{
+				Cliente: "Clínica San Rafael de Medellín",
+				Modalidad: "Ultrasonido",
+				Cantidad: 1,
+				Marca: "GE Logiq",
+				Antigüedad: "",
+				Estado: "Nuevo",
+			},
+			{
+				Cliente: "Clínica San Rafael de Medellín",
+				Modalidad: "Tomografía",
+				Cantidad: 1,
+				Marca: "Siemens",
+				Antigüedad: 2015,
+				Estado: "",
+			},
+		],
 	},
 };
