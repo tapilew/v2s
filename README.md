@@ -60,7 +60,15 @@ Modalidad, marca y estado "Estimado" (por "unos seis años") son correctos. El n
 - La única conexión de red es la primera descarga de modelos desde el registro de QVAC, que usa Hyperswarm (P2P).
 - Las hojas se guardan en archivos JSON dentro del almacenamiento privado de la app.
 
+## Instalar en un teléfono (sin compilar)
+
+[**Descargar el APK oficial**](https://github.com/tapilew/v2s/releases/latest/download/v2s.apk) · [Ver la release](https://github.com/tapilew/v2s/releases/latest)
+
+Android 10 o superior, con sistema ARM64. Empieza por la [guía corta de instalación y primera prueba](docs/INSTALAR-ANDROID.md). Si falla, comparte la [guía de diagnóstico para agentes](docs/DIAGNOSTICO-ANDROID.md). No necesitas Expo Go para usar el APK.
+
 ## Ejecutar en Android
+
+Para compilar localmente:
 
 ```sh
 bun install
