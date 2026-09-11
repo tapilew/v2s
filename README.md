@@ -98,6 +98,15 @@ Whisper omitió la mitad del audio. Script, audio y resultados: `eval/probe/asr-
 
 Sobre frases de dinero, MedPsy omitió movimientos e inventó una fila, y Qwen3 encontró todos (`eval/probe/finance-results.jsonl`). Sobre frases de equipos médicos, Llama 3.2 1B escribió "visto" como nombre del cliente, y MedPsy identificó hospital, ciudad y país (`eval/probe/results.jsonl`). Cada modo usa el modelo que mejor resolvió su tipo de texto.
 
+Salud cubre dos tipos de texto: equipos médicos y consultas clínicas. Corrimos los dos conjuntos con los dos modelos para decidir cuál se queda:
+
+| Recall de valores clave | MedPsy | Qwen3 |
+| --- | --- | --- |
+| Equipos médicos (12 casos) | 59.2 % | 83.7 % |
+| Consultas clínicas (10 casos) | 47.2 % | 28.3 % |
+
+Qwen3 gana en equipos, un texto descriptivo sin vocabulario médico especializado. MedPsy gana claramente en consultas, donde hay identidad del paciente, signos vitales y medicamentos con dosis, el vocabulario para el que se entrenó. Salud se queda con MedPsy: gana la mitad más difícil de su rango, y el reto QVAC Psy exige un modelo Psy en el flujo principal. Datos completos: `eval/runs/equipos-*` y `eval/runs/consultations-*`.
+
 ## Exportar a Google Sheets
 
 El botón **Exportar a Google Sheets** comparte `<nombre de la hoja>.csv` por el menú de Android. Elige Google Drive y ábrelo con Sheets. El CSV usa UTF-8 con BOM y comillas según RFC 4180, así que acentos y celdas con comas llegan intactos.
