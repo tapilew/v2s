@@ -5,8 +5,8 @@
 ## Instalar y empezar
 
 1. **Comprueba el teléfono:** Android **10 o superior**, con sistema **ARM64 (`arm64-v8a`)**. Este APK no se instala en iPhone ni en Android de 32 bits. No hemos determinado un mínimo de RAM ni certificado todos los teléfonos.
-2. **[Abre la última release](https://github.com/tapilew/v2s/releases/latest)** y descarga **Assets → `v2s.apk`**, no «Source code». Usa **build 5 o posterior**, no una copia vieja de un chat. [Descarga directa](https://github.com/tapilew/v2s/releases/latest/download/v2s.apk). Si GitHub pide acceso, solicítalo al equipo.
-3. **Espera a que termine la descarga** —build 5 pesa unos 342 MB— y abre el archivo. Si Android lo pide, permite instalar desde **ese navegador/gestor de archivos**; puedes retirar ese permiso después. **No apagues Play Protect ni eludas restricciones del administrador.**
+2. **[Abre la última release](https://github.com/tapilew/v2s/releases/latest)** y descarga **Assets → `v2s.apk`**, no «Source code». Usa **build 9 o posterior**, no una copia vieja de un chat. [Descarga directa](https://github.com/tapilew/v2s/releases/latest/download/v2s.apk). Si GitHub pide acceso, solicítalo al equipo.
+3. **Espera a que termine la descarga** —build 9 pesa unos 137 MB— y abre el archivo. Si Android lo pide, permite instalar desde **ese navegador/gestor de archivos**; puedes retirar ese permiso después. **No apagues Play Protect ni eludas restricciones del administrador.**
 4. **Instala o actualiza y abre V2S.** Si aparece un conflicto con una instalación anterior, **no desinstales ni borres su almacenamiento**: perderías hojas y modelos. Guarda el mensaje y pide ayuda.
 5. **Empieza por Finanzas con Wi-Fi.** Deja terminar la preparación y desaparecer la banda «Cargando…». Puede tardar varios minutos. Mantén la app abierta; no pulses Reintentar repetidamente si el porcentaje sigue avanzando.
 
