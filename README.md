@@ -30,28 +30,33 @@ Los dos arneses comparten las mismas reglas base: una fila por cosa dicha, celda
 
 ## Hojas generadas de verdad
 
-Estas hojas salieron de los modelos reales en la corrida de evaluación (`eval/runs/`), sin editar. Nadie definió las columnas.
+Estas hojas salieron de los modelos reales en la corrida de evaluación (`eval/runs/`), sin editar. Nadie definió las columnas. Incluimos los errores que cometió el modelo, porque la app está hecha para que los veas y los corrijas.
 
 ### Finanzas (Qwen3 1.7B)
 
-Texto: "undefined"
+Texto: "Ayer compré útiles escolares por 38.50 y el taxi fue 6."
 
 Hoja generada: **Movimientos**
 
 | Fecha | Concepto | Tipo | Categoría | Monto | Método |
 | --- | --- | --- | --- | --- | --- |
-| 2026-09-10 | Luz | Gasto | Alimentación | 45 | Yappy |
-| 2026-09-10 | Almuerzo | Gasto | Alimentación | 12 | Efectivo |
+| 2026-09-09 | Útiles escolares | Gasto | Educación | 38.5 | Tarjeta |
+| 2026-09-09 | Taxi | Gasto | Transporte | 6 | Tarjeta |
+
+"Ayer" se convirtió en la fecha correcta y las categorías son las esperadas. El método "Tarjeta" no se dijo: el modelo lo inventó. Por eso cada celda se edita antes de exportar.
 
 ### Salud (MedPsy 1.7B)
 
-Texto: "undefined"
+Texto: "Centro de Imágenes Diagnósticas en Guatemala. Tienen un tomógrafo Siemens Somatom de unos seis años y un equipo de rayos X Fujifilm."
 
-Hoja generada: **Equipos Hospital DemoCare Pacific**
+Hoja generada: **Centro de Imágenes Diagnósticas en Guat**
 
-| Hospital | Modalidad | Cantidad | Marca | Antigüedad | Estado |
+| Cliente | Modalidad | Cantidad | Marca | Antigüedad | Estado |
 | --- | --- | --- | --- | --- | --- |
-| Hospital DemoCare Pacific, en Panamá | Ultrasonido | 2 | Philips | 8 años | Estimado |
+| Centro de Imágenes Diagnósticas en Guat | Tomografía | 1 | Siemens | 6 | Estimado |
+| Centro de Imágenes Diagnósticas en Guat | Radiografía | 1 | Fujifilm | 1 | Estimado |
+
+Modalidad, marca y estado "Estimado" (por "unos seis años") son correctos. El nombre del cliente quedó cortado por el límite de largo del campo, y la antigüedad "1" del equipo de rayos X no se dijo, así que la app la marca para revisar.
 
 ## Evidencia
 
