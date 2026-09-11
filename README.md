@@ -28,6 +28,8 @@ Los casos de uso son **Finanzas** y **Salud**. Sirve como asesor de ahorro, para
 
 Los dos arneses comparten las mismas reglas base: una fila por cosa dicha, celdas vacías cuando falta un dato, nunca inventar números, fechas AAAA-MM-DD, un ejemplo resuelto y salida restringida por JSON Schema. La app carga solo el modelo del modo abierto.
 
+ejemplos:
+
 ### Finanzas (Qwen3 1.7B)
 
 Texto: "Ayer compré útiles escolares por 38.50 y el taxi fue 6."
@@ -39,20 +41,16 @@ Hoja generada: **Movimientos**
 | 2026-09-09 | Útiles escolares | Gasto | Educación | 38.5 | Tarjeta |
 | 2026-09-09 | Taxi | Gasto | Transporte | 6 | Tarjeta |
 
-"Ayer" se convirtió en la fecha correcta y las categorías son las esperadas. El método "Tarjeta" no se dijo: el modelo lo inventó. Por eso cada celda se edita antes de exportar.
-
 ### Salud (MedPsy 1.7B)
 
 Texto: "Centro de Imágenes Diagnósticas en Guatemala. Tienen un tomógrafo Siemens Somatom de unos seis años y un equipo de rayos X Fujifilm."
 
-Hoja generada: **Centro de Imágenes Diagnósticas en Guat**
+Hoja generada: **Centro de Imágenes Diagnósticas en Guatemala**
 
 | Cliente | Modalidad | Cantidad | Marca | Antigüedad | Estado |
 | --- | --- | --- | --- | --- | --- |
-| Centro de Imágenes Diagnósticas en Guat | Tomografía | 1 | Siemens | 6 | Estimado |
-| Centro de Imágenes Diagnósticas en Guat | Radiografía | 1 | Fujifilm | 1 | Estimado |
-
-Modalidad, marca y estado "Estimado" (por "unos seis años") son correctos. El nombre del cliente quedó cortado por el límite de largo del campo, y la antigüedad "1" del equipo de rayos X no se dijo, así que la app la marca para revisar.
+| Centro de Imágenes Diagnósticas en Guatemala | Tomografía | 1 | Siemens | 6 | Estimado |
+| Centro de Imágenes Diagnósticas en Guatemala | Radiografía | 1 | Fujifilm | 1 | Estimado |
 
 ## Sin nube
 
