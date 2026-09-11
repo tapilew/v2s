@@ -21,6 +21,7 @@ import {
 } from "react";
 import {
 	ActivityIndicator,
+	Alert,
 	Animated,
 	Easing,
 	KeyboardAvoidingView,
@@ -40,67 +41,105 @@ import {
 	SafeAreaProvider,
 	useSafeAreaInsets,
 } from "react-native-safe-area-context";
-import { createDemoEngine, demoVisits, EXAMPLE } from "./src/demo";
+import { createDemoEngine } from "./src/demo";
 import { createQvacEngine } from "./src/engine";
-import {
-	appendAnswer,
-	type ClientBase,
-	confidenceFactors,
-	type ExtractedUnit,
-	type FleetSummary,
-	fleetSummary,
-	installedBase,
-	type Modality,
-	nextQuestion,
-	type Status,
-	toCsv,
-	type Unit,
-	type Visit,
-} from "./src/installed-base";
-import { MODEL_ROLES, MODELS, type ModelRole } from "./src/models";
+import { ALL_MODELS, type ModelSpec } from "./src/models";
+import { MODES } from "./src/modes";
 import { DEVICE, hasPerfLog, perfLogFile } from "./src/perf-log";
-import { openStore } from "./src/store";
-
-type Target =
-	| { kind: "new" }
-	| { kind: "answer"; visitId: string; question: string };
+import {
+	type Badge,
+	type Cell,
+	type ClientGroup,
+	type Field,
+	type LooseRecord,
+	MODE_IDS,
+	type Mode,
+	type ModeId,
+	type SheetRow,
+	type SheetView,
+	type SummaryItem,
+	sheetRows,
+	type TableLine,
+	type Tone,
+} from "./src/sheet";
+import { openRecordStore, openTextStore } from "./src/store";
 
 type ErrorScope =
 	| { kind: "models" }
 	| { kind: "capture" }
-	| { kind: "extract"; visitId: string };
+	| { kind: "extract"; recordId: string };
 
-type Phase =
+type Capture =
 	| { kind: "booting" }
-	| { kind: "loading"; role: ModelRole; progress: number }
+	| { kind: "loading"; model: ModelSpec; progress: number }
 	| { kind: "ready" }
-	| { kind: "starting"; target: Target }
-	| { kind: "recording"; target: Target }
-	| { kind: "transcribing"; target: Target }
-	| { kind: "extracting"; visitId: string }
+	| { kind: "starting" }
+	| { kind: "recording" }
+	| { kind: "transcribing" }
+	| { kind: "extracting"; recordId: string }
 	| { kind: "error"; message: string; scope: ErrorScope };
 
-type Undo =
-	| { kind: "delete" }
-	| { kind: "restore"; visit: Visit; question: string }
-	| { kind: "none" };
+type Ledgers = Record<ModeId, readonly LooseRecord[]>;
 
-type Focus = { visitId: string; undo: Undo };
+type Undo = {
+	mode: ModeId;
+	before: readonly LooseRecord[];
+	label: string;
+	text: string | null;
+	reopen: string | null;
+};
+
+type Focus = { mode: ModeId; recordId: string };
 
 type StatusView = {
 	title: string;
 	caption: string | null;
-	tone: "busy" | "live" | "error";
+	tone: "busy" | "error";
 	progress: number | null;
 };
 
 const uiOnly = process.env.EXPO_PUBLIC_UI_ONLY === "true";
 const engine = uiOnly ? createDemoEngine() : createQvacEngine();
-const store = openStore(uiOnly ? "demo-visits" : "visits");
+const filePrefix = uiOnly ? "demo-" : "";
+
+const byMode = <T,>(make: (id: ModeId) => T): Record<ModeId, T> => ({
+	finanzas: make("finanzas"),
+	salud: make("salud"),
+});
+
+const recordStores = byMode((id) => openRecordStore(`${filePrefix}${id}`));
+const composerStores = byMode((id) =>
+	openTextStore(`${filePrefix}composer-${id}`),
+);
 
 const ACCENT = "#7FE3D4";
-const DAY_MS = 86_400_000;
 const METER_BARS = 9;
+const MAX_RECORDING_SECONDS = 600;
+
+const LOCKED_PHASES: ReadonlySet<Capture["kind"]> = new Set([
+	"starting",
+	"recording",
+	"transcribing",
+	"extracting",
+]);
+
+const TONE_COLOR: Record<Tone, string> = {
+	neutral: "#E3EEEA",
+	income: "#A6E08A",
+	expense: "#F6B8A8",
+	saving: "#93BDFF",
+	confirmed: "#A6E08A",
+	reported: "#93BDFF",
+	estimated: "#F2C46D",
+	unknown: "#A7B0AA",
+	renewal: "#F3A27A",
+};
+
+const ERROR_TITLE: Record<ErrorScope["kind"], string> = {
+	models: "No se pudo cargar el modelo",
+	capture: "No pude usar esa captura",
+	extract: "No pude llenar la hoja",
+};
 
 const RECORDING_OPTIONS: RecordingOptions = {
 	directory: "cache",
@@ -125,70 +164,6 @@ const RECORDING_OPTIONS: RecordingOptions = {
 	web: { mimeType: "audio/mp4", bitsPerSecond: 64000 },
 };
 
-const MODALITY_NOUN: Record<
-	Modality,
-	{ label: string; one: string; many: string }
-> = {
-	"Resonancia magnética": {
-		label: "Resonador",
-		one: "resonador",
-		many: "resonadores",
-	},
-	Tomografía: { label: "Tomógrafo", one: "tomógrafo", many: "tomógrafos" },
-	Ultrasonido: { label: "Ecógrafo", one: "ecógrafo", many: "ecógrafos" },
-	"Rayos X": {
-		label: "Rayos X",
-		one: "equipo de rayos X",
-		many: "equipos de rayos X",
-	},
-	Mamografía: { label: "Mamógrafo", one: "mamógrafo", many: "mamógrafos" },
-	Angiografía: { label: "Angiógrafo", one: "angiógrafo", many: "angiógrafos" },
-	"Medicina nuclear": {
-		label: "Gammacámara",
-		one: "gammacámara",
-		many: "gammacámaras",
-	},
-	Otro: { label: "Otro equipo", one: "otro equipo", many: "otros equipos" },
-};
-
-const STATUS_TONE: Record<Status, { color: string; backgroundColor: string }> =
-	{
-		Confirmado: {
-			color: "#A6E08A",
-			backgroundColor: "rgba(166, 224, 138, 0.13)",
-		},
-		Reportado: {
-			color: "#93BDFF",
-			backgroundColor: "rgba(147, 189, 255, 0.13)",
-		},
-		Estimado: {
-			color: "#F2C46D",
-			backgroundColor: "rgba(242, 196, 109, 0.13)",
-		},
-		Desconocido: {
-			color: "#A7B0AA",
-			backgroundColor: "rgba(167, 176, 170, 0.13)",
-		},
-	};
-
-const ERROR_TITLE: Record<ErrorScope["kind"], string> = {
-	models: "No se pudieron cargar los modelos",
-	capture: "No pude usar esa captura",
-	extract: "No pude ordenar la visita",
-};
-
-const EXAMPLE_CLIENT: ClientBase | undefined = installedBase(
-	[
-		{
-			id: "ejemplo",
-			at: 0,
-			said: EXAMPLE.said,
-			extraction: EXAMPLE.extraction,
-		},
-	],
-	0,
-)[0];
-
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const errorMessage = (error: unknown) =>
 	error instanceof Error ? error.message : "Ocurrió un error inesperado.";
@@ -199,11 +174,15 @@ const isMeaningfulTranscript = (text: string) => {
 	if (!normalized || /^\[[^\]]+\]$/.test(normalized)) return false;
 	return normalized.replace(/[^\p{L}\p{N}]/gu, "").length >= 3;
 };
-const questionKey = (visitId: string, question: string) =>
-	`${visitId}\n${question}`;
-const isIdle = (phase: Phase) =>
+const questionKey = (recordId: string, question: string) =>
+	`${recordId}\n${question}`;
+const isIdle = (phase: Capture) =>
 	phase.kind === "ready" ||
 	(phase.kind === "error" && phase.scope.kind !== "models");
+const cellText = (cell: Cell | undefined) =>
+	cell === null || cell === undefined ? "" : String(cell);
+const count = (n: number, one: string, many: string) =>
+	`${n} ${n === 1 ? one : many}`;
 
 const formatClock = (totalSeconds: number) => {
 	const minutes = Math.floor(totalSeconds / 60);
@@ -211,79 +190,32 @@ const formatClock = (totalSeconds: number) => {
 	return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 };
 
-const count = (n: number, one: string, many: string) =>
-	`${n} ${n === 1 ? one : many}`;
-
-const relativeDay = (at: number, now: number) => {
-	const days = Math.floor((now - at) / DAY_MS);
-	if (days < 1) return "hoy";
-	if (days < 2) return "ayer";
-	if (days < 30) return `hace ${days} días`;
-	if (days < 365) return `hace ${count(Math.floor(days / 30), "mes", "meses")}`;
-	return `hace ${count(Math.floor(days / 365), "año", "años")}`;
-};
-
-const placeOf = (city: string | null, country: string | null) =>
-	[city, country].filter(Boolean).join(", ");
-
-const unitTitle = (modality: Modality, quantity: number | null) =>
-	`${MODALITY_NOUN[modality].label}${quantity !== null && quantity > 1 ? ` ×${quantity}` : ""}`;
-
-const unitDetail = (
-	brand: string | null,
-	model: string | null,
-	ageYears: number | null,
-) => {
-	const name =
-		brand === null
-			? [model, "Marca sin confirmar"].filter(Boolean).join(" · ")
-			: [brand, model].filter(Boolean).join(" ");
-	if (ageYears === null) return name;
-	const age =
-		ageYears < 1
-			? "menos de 1 año"
-			: count(Math.round(ageYears), "año", "años");
-	return `${name} · ${age}`;
-};
-
-const busy = (title: string): StatusView => ({
+const busyStatus = (title: string): StatusView => ({
 	title,
 	caption: null,
 	tone: "busy",
 	progress: null,
 });
 
-const statusFor = (phase: Phase): StatusView | null => {
+const statusFor = (phase: Capture): StatusView | null => {
 	switch (phase.kind) {
 		case "ready":
+		case "starting":
+		case "recording":
 			return null;
 		case "booting":
-			return busy("Preparando");
-		case "loading": {
-			const spec = MODELS[phase.role];
+			return busyStatus("Preparando los modelos");
+		case "loading":
 			return {
-				title: `Cargando ${spec.label}`,
-				caption: `Modelo ${MODEL_ROLES.indexOf(phase.role) + 1} de ${MODEL_ROLES.length} · ${spec.approxSize} · se descarga una sola vez`,
+				title: `Cargando ${phase.model.label}`,
+				caption: `${phase.model.approxSize} · se descarga una sola vez y se queda en el teléfono`,
 				tone: "busy",
 				progress: phase.progress,
 			};
-		}
-		case "starting":
-			return busy("Preparando el micrófono");
-		case "recording":
-			return {
-				title: "Te escucho",
-				caption:
-					phase.target.kind === "answer"
-						? phase.target.question
-						: "Toca de nuevo cuando termines",
-				tone: "live",
-				progress: null,
-			};
 		case "transcribing":
-			return busy("Transcribiendo");
+			return busyStatus("Transcribiendo tu voz");
 		case "extracting":
-			return busy("Ordenando la visita");
+			return busyStatus("Llenando la hoja");
 		case "error":
 			return {
 				title: ERROR_TITLE[phase.scope.kind],
@@ -294,41 +226,34 @@ const statusFor = (phase: Phase): StatusView | null => {
 	}
 };
 
-const hintFor = (phase: Phase, target: Target) => {
-	if (phase.kind === "booting" || phase.kind === "loading")
-		return "Preparando los modelos";
-	if (phase.kind === "error" && phase.scope.kind === "models")
-		return "Los modelos no están listos";
-	if (phase.kind === "starting") return "Preparando el micrófono";
-	if (phase.kind === "transcribing") return "Transcribiendo";
-	if (phase.kind === "extracting") return "Ordenando la visita";
-	return target.kind === "answer"
-		? "Toca para responder"
-		: "Toca y cuenta qué equipos viste";
+const bootLedgers = (): { ledgers: Ledgers; quarantined: boolean } => {
+	let quarantined = false;
+	const ledgers = byMode((id) => {
+		const read = recordStores[id].load();
+		if (read.kind === "ok") return MODES[id].admit(read.records);
+		if (read.kind === "quarantined") {
+			quarantined = true;
+			return [];
+		}
+		if (!uiOnly) return [];
+		const seeded = MODES[id].demo.seed(new Date());
+		try {
+			recordStores[id].save(seeded);
+		} catch {}
+		return seeded;
+	});
+	return { ledgers, quarantined };
 };
 
-const bootVisits = (): { visits: readonly Visit[]; quarantined: boolean } => {
-	const read = store.load();
-	if (read.kind === "ok") return { visits: read.visits, quarantined: false };
-	if (read.kind === "quarantined") return { visits: [], quarantined: true };
-	if (!uiOnly) return { visits: [], quarantined: false };
-	const seeded = demoVisits(Date.now());
-	try {
-		store.save(seeded);
-		return { visits: seeded, quarantined: false };
-	} catch {
-		return { visits: [], quarantined: false };
-	}
-};
-
-const shareFile = async (file: File, mimeType: string, UTI: string) => {
+const shareFile = async (
+	file: File,
+	mimeType: string,
+	UTI: string,
+	dialogTitle: string,
+) => {
 	try {
 		if (!(await Sharing.isAvailableAsync())) throw new Error("unavailable");
-		await Sharing.shareAsync(file.uri, {
-			dialogTitle: file.name,
-			mimeType,
-			UTI,
-		});
+		await Sharing.shareAsync(file.uri, { dialogTitle, mimeType, UTI });
 	} catch {
 		try {
 			await Share.share({ message: file.textSync(), title: file.name });
@@ -339,7 +264,7 @@ const shareFile = async (file: File, mimeType: string, UTI: string) => {
 const deviceLine = () =>
 	[
 		DEVICE.modelName ?? "Teléfono desconocido",
-		DEVICE.osVersion ? `versión ${DEVICE.osVersion}` : null,
+		DEVICE.osVersion ? `Android ${DEVICE.osVersion}` : null,
 		DEVICE.totalMemory
 			? `${(DEVICE.totalMemory / 1024 ** 3).toFixed(1)} GB de RAM`
 			: null,
@@ -347,17 +272,13 @@ const deviceLine = () =>
 		.filter(Boolean)
 		.join(" · ");
 
-/**
- * NativeWind drops the styles of a Pressable that uses the `style={({ pressed }) => ...}`
- * callback form, which left buttons unstyled on Android. Tracking the press in state keeps
- * the visual feedback while passing a plain style array.
- */
 type PressableBoxProps = Omit<PressableProps, "style" | "children"> & {
 	style?: StyleProp<ViewStyle>;
 	pressedStyle?: StyleProp<ViewStyle>;
 	children: ReactNode;
 };
 
+// NativeWind drops the styles of a Pressable that uses a style callback, so the pressed state lives in React state.
 function PressableBox({
 	style,
 	pressedStyle,
@@ -378,13 +299,35 @@ function PressableBox({
 	);
 }
 
+function Tappable({
+	onPress,
+	style,
+	children,
+}: {
+	onPress: (() => void) | null;
+	style: StyleProp<ViewStyle>;
+	children: ReactNode;
+}) {
+	if (!onPress) return <View style={style}>{children}</View>;
+	return (
+		<PressableBox
+			accessibilityHint="Abre el detalle de la fila"
+			onPress={onPress}
+			pressedStyle={styles.pressedRow}
+			style={style}
+		>
+			{children}
+		</PressableBox>
+	);
+}
+
 function LevelMeter({ level }: { level: number }) {
 	return (
 		<View style={styles.meter}>
 			{Array.from({ length: METER_BARS }, (_, index) => {
 				const distance = Math.abs(index - (METER_BARS - 1) / 2);
 				const falloff = 1 - distance / METER_BARS;
-				const height = Math.round(5 + falloff * 7 + level * falloff * 20);
+				const height = Math.round(4 + falloff * 6 + level * falloff * 16);
 				return (
 					// biome-ignore lint/suspicious/noArrayIndexKey: bars are positional, not data.
 					<View key={index} style={[styles.meterBar, { height }]} />
@@ -394,327 +337,172 @@ function LevelMeter({ level }: { level: number }) {
 	);
 }
 
-function StatusChip({ status }: { status: Status }) {
-	const tone = STATUS_TONE[status];
+function Chip({ badge }: { badge: Badge }) {
+	const color = TONE_COLOR[badge.tone];
 	return (
-		<View style={[styles.chip, { backgroundColor: tone.backgroundColor }]}>
-			<Text style={[styles.chipText, { color: tone.color }]}>{status}</Text>
+		<View style={[styles.chip, { borderColor: `${color}55` }]}>
+			<Text style={[styles.chipText, { color }]}>{badge.label}</Text>
 		</View>
 	);
 }
 
-function UnitLine({
-	modality,
-	quantity,
-	brand,
-	model,
-	ageYears,
-	status,
-}: {
-	modality: Modality;
-	quantity: number | null;
-	brand: string | null;
-	model: string | null;
-	ageYears: number | null;
-	status: Status;
-}) {
+function SummaryStrip({ items }: { items: readonly SummaryItem[] }) {
+	const basis = items.length > 4 ? "30%" : "45%";
 	return (
-		<View style={styles.unitLine}>
-			<View style={styles.flexCopy}>
-				<Text style={styles.unitTitle}>{unitTitle(modality, quantity)}</Text>
-				<Text style={styles.unitDetail}>
-					{unitDetail(brand, model, ageYears)}
-				</Text>
-			</View>
-			<StatusChip status={status} />
-		</View>
-	);
-}
-
-function UnitRow({
-	unit,
-	located,
-	expanded,
-	onToggle,
-}: {
-	unit: Unit;
-	located: boolean;
-	expanded: boolean;
-	onToggle: (() => void) | null;
-}) {
-	const body = (
-		<>
-			<UnitLine
-				ageYears={unit.ageYears}
-				brand={unit.brand}
-				modality={unit.modality}
-				model={unit.model}
-				quantity={unit.quantity}
-				status={unit.status}
-			/>
-			{unit.renewal || unit.stale ? (
-				<View style={styles.tags}>
-					{unit.renewal ? (
-						<View style={[styles.tag, styles.tagRenewal]}>
-							<Text style={[styles.tagText, styles.tagRenewalText]}>
-								Renovar
-							</Text>
-						</View>
-					) : null}
-					{unit.stale ? (
-						<View style={[styles.tag, styles.tagStale]}>
-							<Text style={styles.tagText}>Sin verificar</Text>
-						</View>
-					) : null}
-				</View>
-			) : null}
-			{expanded ? (
-				<View style={styles.factors}>
-					<Text style={styles.factorsTitle}>Confianza {unit.confidence}</Text>
-					<Text style={styles.factorsText}>
-						{confidenceFactors({ ...unit, located })
-							.map(
-								(factor) =>
-									`${factor.label} ${factor.points > 0 ? "+" : ""}${factor.points}`,
-							)
-							.join(" · ")}
+		<View style={styles.summary}>
+			{items.map((item) => (
+				<View key={item.label} style={[styles.tile, { flexBasis: basis }]}>
+					<Text numberOfLines={1} style={styles.tileLabel}>
+						{item.label}
 					</Text>
-					<Text style={styles.factorsText}>
-						Visto en {count(unit.confirmations, "visita", "visitas")}
+					<Text
+						numberOfLines={1}
+						style={[styles.tileValue, { color: TONE_COLOR[item.tone] }]}
+					>
+						{item.value}
 					</Text>
 				</View>
-			) : null}
-		</>
-	);
-	if (!onToggle) return <View style={styles.unitRow}>{body}</View>;
-	return (
-		<PressableBox
-			accessibilityHint="Muestra la confianza del dato"
-			accessibilityState={{ expanded }}
-			onPress={onToggle}
-			pressedStyle={styles.pressedRow}
-			style={styles.unitRow}
-		>
-			{body}
-		</PressableBox>
-	);
-}
-
-function ClientCard({
-	client,
-	now,
-	expandedUnit,
-	onToggleUnit,
-}: {
-	client: ClientBase;
-	now: number | null;
-	expandedUnit: string | null;
-	onToggleUnit: ((key: string) => void) | null;
-}) {
-	const example = now === null;
-	const located = client.city !== null || client.country !== null;
-	const meta = [
-		placeOf(client.city, client.country),
-		now === null ? null : relativeDay(client.lastVisitAt, now),
-	]
-		.filter(Boolean)
-		.join(" · ");
-	return (
-		<View style={[styles.card, example && styles.cardExample]}>
-			<View style={styles.clientHead}>
-				<View style={styles.flexCopy}>
-					<Text style={styles.clientName}>{client.name}</Text>
-					{meta ? <Text style={styles.clientMeta}>{meta}</Text> : null}
-				</View>
-				{example ? (
-					<View style={styles.exampleTag}>
-						<Text style={styles.exampleTagText}>EJEMPLO</Text>
-					</View>
-				) : null}
-			</View>
-			{client.units.length === 0 ? (
-				<Text style={styles.muted}>Sin equipos todavía.</Text>
-			) : (
-				client.units.map((unit) => (
-					<UnitRow
-						expanded={expandedUnit === unit.key}
-						key={unit.key}
-						located={located}
-						onToggle={onToggleUnit ? () => onToggleUnit(unit.key) : null}
-						unit={unit}
-					/>
-				))
-			)}
+			))}
 		</View>
 	);
 }
 
-function FleetBar({
-	summary,
-	onShare,
+function TableView({
+	headers,
+	lines,
+	onOpen,
 }: {
-	summary: FleetSummary;
-	onShare: () => void;
+	headers: Extract<SheetView, { kind: "table" }>["headers"];
+	lines: readonly TableLine[];
+	onOpen: ((row: SheetRow) => void) | null;
 }) {
-	const line = [
-		count(summary.clients, "cliente", "clientes"),
-		count(summary.units, "equipo", "equipos"),
-		summary.renewals > 0 ? `${summary.renewals} por renovar` : null,
-		summary.stale > 0 ? `${summary.stale} sin verificar` : null,
-	]
-		.filter(Boolean)
-		.join(" · ");
 	return (
-		<View style={styles.fleet}>
-			<View style={styles.fleetHead}>
-				<Text style={styles.fleetLine}>{line}</Text>
-				<PressableBox
-					accessibilityLabel="Compartir la base instalada como CSV"
-					onPress={onShare}
-					pressedStyle={styles.pressedStrong}
-					style={styles.csvButton}
+		<View>
+			<View style={styles.tableHead}>
+				<Text style={[styles.th, styles.colDate]}>{headers.date}</Text>
+				<Text style={[styles.th, styles.colTitle]}>{headers.title}</Text>
+				<Text style={[styles.th, styles.colSub]}>{headers.subtitle}</Text>
+				<Text style={[styles.th, styles.colAmount]}>{headers.amount}</Text>
+			</View>
+			{lines.map((line) => (
+				<Tappable
+					key={line.row.key}
+					onPress={onOpen && (() => onOpen(line.row))}
+					style={styles.tr}
 				>
-					<Text style={styles.csvButtonText}>CSV ↗</Text>
-				</PressableBox>
-			</View>
-			<View style={styles.modalities}>
-				{summary.byModality.map(({ modality, units }) => (
-					<View key={modality} style={styles.modalityChip}>
-						<Text style={styles.modalityText}>
-							{count(
-								units,
-								MODALITY_NOUN[modality].one,
-								MODALITY_NOUN[modality].many,
-							)}
-						</Text>
+					<Text style={[styles.td, styles.tdMuted, styles.colDate]}>
+						{line.date}
+					</Text>
+					<View style={styles.colTitle}>
+						<Text style={styles.td}>{line.title}</Text>
+						{line.row.unverified.length > 0 ? (
+							<Text style={styles.flag}>Revisar</Text>
+						) : null}
 					</View>
-				))}
-			</View>
+					<Text style={[styles.td, styles.tdMuted, styles.colSub]}>
+						{line.subtitle}
+					</Text>
+					<Text
+						style={[
+							styles.td,
+							styles.amount,
+							styles.colAmount,
+							{ color: TONE_COLOR[line.amount.tone] },
+						]}
+					>
+						{line.amount.label}
+					</Text>
+				</Tappable>
+			))}
 		</View>
 	);
 }
 
-function ExtractedLines({ units }: { units: readonly ExtractedUnit[] }) {
-	return units.map((unit, index) => (
-		<UnitLine
-			ageYears={unit.antiguedad_anios}
-			brand={unit.marca}
-			// biome-ignore lint/suspicious/noArrayIndexKey: extracted units have no identity until merged.
-			key={index}
-			modality={unit.modalidad}
-			model={unit.modelo}
-			quantity={unit.cantidad}
-			status={unit.estado}
-		/>
-	));
+function CardsView({
+	clients,
+	onOpen,
+}: {
+	clients: readonly ClientGroup[];
+	onOpen: ((row: SheetRow) => void) | null;
+}) {
+	return (
+		<View style={styles.cards}>
+			{clients.map((client) => (
+				<View key={client.key} style={styles.clientCard}>
+					<Text style={styles.clientName}>{client.name}</Text>
+					{client.meta ? (
+						<Text style={styles.clientMeta}>{client.meta}</Text>
+					) : null}
+					{client.units.map((unit) => (
+						<Tappable
+							key={unit.row.key}
+							onPress={onOpen && (() => onOpen(unit.row))}
+							style={styles.unitRow}
+						>
+							<View style={styles.unitLine}>
+								<View style={styles.flexCopy}>
+									<Text style={styles.unitTitle}>{unit.title}</Text>
+									<Text style={styles.unitDetail}>{unit.detail}</Text>
+								</View>
+								<Chip badge={unit.status} />
+							</View>
+							{unit.tags.length > 0 ? (
+								<View style={styles.tags}>
+									{unit.tags.map((tag) => (
+										<Chip badge={tag} key={tag.label} />
+									))}
+								</View>
+							) : null}
+						</Tappable>
+					))}
+				</View>
+			))}
+		</View>
+	);
 }
 
-function CaptureCard({
-	visit,
-	extracting,
-	question,
-	canAct,
-	onUndo,
-	onRetry,
-	onSkip,
+function SheetBody({
+	view,
+	onOpen,
 }: {
-	visit: Visit;
-	extracting: boolean;
-	question: string | null;
-	canAct: boolean;
-	onUndo: (() => void) | null;
-	onRetry: () => void;
-	onSkip: () => void;
+	view: SheetView;
+	onOpen: ((row: SheetRow) => void) | null;
 }) {
-	const [open, setOpen] = useState(false);
-	const { extraction } = visit;
-	const place = extraction ? placeOf(extraction.ciudad, extraction.pais) : "";
+	return view.kind === "table" ? (
+		<TableView headers={view.headers} lines={view.lines} onOpen={onOpen} />
+	) : (
+		<CardsView clients={view.clients} onOpen={onOpen} />
+	);
+}
+
+function EmptyState({ mode }: { mode: Mode }) {
+	const example = useMemo(() => {
+		const now = new Date();
+		const draft = mode.assemble(mode.demo.example, mode.demo.modelText, now);
+		return draft === null
+			? null
+			: mode.view(
+					[
+						{
+							id: "ejemplo",
+							at: now.getTime(),
+							source: mode.demo.example,
+							...draft,
+						},
+					],
+					now,
+				);
+	}, [mode]);
 	return (
-		<View style={[styles.card, styles.captureCard]}>
-			<View style={styles.cardHead}>
-				<Text style={styles.cardLabel}>
-					{onUndo ? "RECIÉN CAPTURADO" : "COMPLETA LA VISITA"}
-				</Text>
-				{onUndo ? (
-					<PressableBox
-						accessibilityLabel="Deshacer la última captura"
-						disabled={!canAct}
-						onPress={onUndo}
-						pressedStyle={styles.pressedSoft}
-						style={styles.textButton}
-					>
-						<Text
-							style={[styles.textButtonLabel, !canAct && styles.disabledText]}
-						>
-							Deshacer
-						</Text>
-					</PressableBox>
-				) : null}
+		<View style={styles.empty}>
+			<Text style={styles.emptyTitle}>Escribe o dicta algo así</Text>
+			<View style={styles.exampleQuote}>
+				<Text style={styles.exampleQuoteText}>"{mode.demo.example}"</Text>
 			</View>
-			<PressableBox
-				accessibilityHint={
-					open ? "Muestra menos" : "Muestra todo lo que escuché"
-				}
-				onPress={() => setOpen((value) => !value)}
-				pressedStyle={styles.pressedSoft}
-			>
-				<Text numberOfLines={open ? undefined : 2} style={styles.heard}>
-					<Text style={styles.heardLabel}>Escuché: </Text>
-					{visit.said}
-				</Text>
-			</PressableBox>
-			{extracting ? (
-				<View style={styles.inlineBusy}>
-					<ActivityIndicator color={ACCENT} size="small" />
-					<Text style={styles.inlineBusyText}>Ordenando la visita</Text>
-				</View>
-			) : extraction ? (
-				<View style={styles.captureResult}>
-					<Text style={styles.clientName}>
-						{extraction.cliente ?? "Falta el hospital"}
-					</Text>
-					{place ? <Text style={styles.clientMeta}>{place}</Text> : null}
-					<ExtractedLines units={extraction.equipos} />
-				</View>
-			) : (
-				<View style={styles.unsorted}>
-					<Text style={styles.muted}>Todavía sin ordenar.</Text>
-					<PressableBox
-						accessibilityLabel="Ordenar esta visita de nuevo"
-						disabled={!canAct}
-						onPress={onRetry}
-						pressedStyle={styles.pressedSoft}
-						style={styles.textButton}
-					>
-						<Text
-							style={[styles.textButtonLabel, !canAct && styles.disabledText]}
-						>
-							Ordenar de nuevo
-						</Text>
-					</PressableBox>
-				</View>
-			)}
-			{question && !extracting ? (
-				<View style={styles.question}>
-					<Text style={styles.questionText}>{question}</Text>
-					<View style={styles.questionFoot}>
-						<Text style={styles.questionHint}>
-							Responde con el micrófono o el teclado
-						</Text>
-						<PressableBox
-							accessibilityLabel="Omitir la pregunta"
-							disabled={!canAct}
-							onPress={onSkip}
-							pressedStyle={styles.pressedSoft}
-							style={styles.textButton}
-						>
-							<Text
-								style={[styles.textButtonMuted, !canAct && styles.disabledText]}
-							>
-								Omitir
-							</Text>
-						</PressableBox>
-					</View>
+			<Text style={styles.emptyArrow}>y se convierte en</Text>
+			{example ? (
+				<View pointerEvents="none" style={styles.ghost}>
+					<SheetBody onOpen={null} view={example} />
 				</View>
 			) : null}
 		</View>
@@ -722,71 +510,109 @@ function CaptureCard({
 }
 
 function PendingCard({
-	visit,
-	now,
+	record,
 	extracting,
 	canAct,
 	onRetry,
-	onComplete,
+	onDelete,
 }: {
-	visit: Visit;
-	now: number;
+	record: LooseRecord;
 	extracting: boolean;
 	canAct: boolean;
 	onRetry: () => void;
-	onComplete: () => void;
+	onDelete: () => void;
 }) {
-	const unsorted = visit.extraction === null;
 	return (
-		<View style={[styles.card, styles.pendingCard]}>
+		<View style={styles.pendingCard}>
 			<Text style={styles.cardLabel}>
-				{unsorted ? "SIN ORDENAR" : "FALTA EL HOSPITAL"} ·{" "}
-				{relativeDay(visit.at, now).toUpperCase()}
+				{extracting ? "LLENANDO LA HOJA" : "GUARDADO SIN LLENAR"}
 			</Text>
-			<Text numberOfLines={3} style={styles.pendingSaid}>
-				{visit.said}
+			<Text numberOfLines={4} style={styles.pendingText}>
+				{record.source}
 			</Text>
-			<PressableBox
-				accessibilityLabel={
-					unsorted ? "Ordenar esta visita de nuevo" : "Completar esta visita"
-				}
-				disabled={!canAct}
-				onPress={unsorted ? onRetry : onComplete}
-				pressedStyle={styles.pressedSoft}
-				style={styles.pendingAction}
-			>
-				{extracting ? (
+			{extracting ? (
+				<View style={styles.inlineBusy}>
 					<ActivityIndicator color={ACCENT} size="small" />
-				) : (
-					<Text
-						style={[styles.pendingActionText, !canAct && styles.disabledText]}
+					<Text style={styles.inlineBusyText}>El modelo está leyendo</Text>
+				</View>
+			) : (
+				<View style={styles.pendingActions}>
+					<PressableBox
+						accessibilityLabel="Intentar llenar la hoja otra vez"
+						disabled={!canAct}
+						onPress={onRetry}
+						pressedStyle={styles.pressedSoft}
+						style={styles.textButton}
 					>
-						{unsorted ? "Ordenar de nuevo" : "Completar"}
-					</Text>
-				)}
-			</PressableBox>
+						<Text style={[styles.textButtonLabel, !canAct && styles.dimmed]}>
+							Reintentar
+						</Text>
+					</PressableBox>
+					<PressableBox
+						accessibilityLabel="Eliminar este texto"
+						disabled={!canAct}
+						onPress={onDelete}
+						pressedStyle={styles.pressedSoft}
+						style={styles.textButton}
+					>
+						<Text style={[styles.textButtonDanger, !canAct && styles.dimmed]}>
+							Eliminar
+						</Text>
+					</PressableBox>
+				</View>
+			)}
 		</View>
 	);
 }
 
-function EmptyState() {
+function ModeMenu({
+	current,
+	top,
+	locked,
+	onPick,
+	onClose,
+}: {
+	current: ModeId;
+	top: number;
+	locked: boolean;
+	onPick: (id: ModeId) => void;
+	onClose: () => void;
+}) {
 	return (
-		<View style={styles.empty}>
-			<Text style={styles.emptyTitle}>
-				Después de una visita, cuenta qué equipos viste
-			</Text>
-			<View style={styles.exampleQuote}>
-				<Text style={styles.exampleQuoteText}>"{EXAMPLE.said}"</Text>
+		<View style={StyleSheet.absoluteFill}>
+			<Pressable
+				accessibilityLabel="Cerrar el menú de hojas"
+				onPress={onClose}
+				style={StyleSheet.absoluteFill}
+			/>
+			<View style={[styles.menu, { top }]}>
+				{MODE_IDS.map((id) => {
+					const option = MODES[id];
+					const active = id === current;
+					const disabled = locked && !active;
+					return (
+						<PressableBox
+							accessibilityState={{ selected: active, disabled }}
+							disabled={disabled}
+							key={id}
+							onPress={() => onPick(id)}
+							pressedStyle={styles.pressedRow}
+							style={[styles.menuOption, disabled && styles.dimmed]}
+						>
+							<View style={styles.flexCopy}>
+								<Text style={styles.menuTitle}>{option.label}</Text>
+								<Text style={styles.menuSubtitle}>{option.subtitle}</Text>
+							</View>
+							<Text style={styles.menuCheck}>{active ? "✓" : ""}</Text>
+						</PressableBox>
+					);
+				})}
+				{locked ? (
+					<Text style={styles.menuHint}>
+						Termina la captura para cambiar de hoja.
+					</Text>
+				) : null}
 			</View>
-			<Text style={styles.emptyArrow}>se convierte en</Text>
-			{EXAMPLE_CLIENT ? (
-				<ClientCard
-					client={EXAMPLE_CLIENT}
-					expandedUnit={null}
-					now={null}
-					onToggleUnit={null}
-				/>
-			) : null}
 		</View>
 	);
 }
@@ -819,43 +645,40 @@ function DeviceSheet({
 				/>
 				<View style={[styles.sheet, { paddingBottom: bottomInset + 18 }]}>
 					<Text style={styles.eyebrow}>EN EL DISPOSITIVO</Text>
-					<Text style={styles.sheetTitle}>
-						Nada sale del teléfono. Sin internet después de la descarga.
+					<Text style={styles.sheetHeadline}>
+						Nada sale del teléfono. Los modelos corren aquí, sin internet
+						después de la descarga.
 					</Text>
-					{MODEL_ROLES.map((role) => {
-						const spec = MODELS[role];
-						const state = uiOnly
-							? "modo demo, sin cargar"
-							: loaded.includes(role)
-								? "cargado"
-								: "sin cargar";
-						return (
-							<View key={role} style={styles.modelRow}>
-								<Text style={styles.modelPurpose}>{spec.purpose}</Text>
-								<Text style={styles.modelLabel}>{spec.label}</Text>
-								<Text style={styles.modelMeta}>
-									{spec.quantization} · {spec.approxSize} · {state}
-								</Text>
-							</View>
-						);
-					})}
+					{ALL_MODELS.map((spec) => (
+						<View key={spec.sdkConstant} style={styles.modelRow}>
+							<Text style={styles.modelPurpose}>{spec.purpose}</Text>
+							<Text style={styles.modelLabel}>{spec.label}</Text>
+							<Text style={styles.modelMeta}>
+								{spec.quantization} · {spec.approxSize} ·{" "}
+								{uiOnly
+									? "modo demo, sin cargar"
+									: loaded.includes(spec.sdkConstant)
+										? "cargado"
+										: "sin cargar"}
+							</Text>
+						</View>
+					))}
 					<Text style={styles.deviceLine}>{deviceLine()}</Text>
 					<PressableBox
 						disabled={!canShare}
 						onPress={() =>
-							void shareFile(perfLogFile(), "text/plain", "public.plain-text")
+							void shareFile(
+								perfLogFile(),
+								"text/plain",
+								"public.plain-text",
+								"Registro de rendimiento",
+							)
 						}
 						pressedStyle={styles.pressedStrong}
-						style={[
-							styles.sheetButton,
-							!canShare && styles.sheetButtonDisabled,
-						]}
+						style={[styles.primaryButton, !canShare && styles.buttonOff]}
 					>
 						<Text
-							style={[
-								styles.sheetButtonText,
-								!canShare && styles.sheetButtonTextDisabled,
-							]}
+							style={[styles.primaryText, !canShare && styles.buttonOffText]}
 						>
 							Compartir registro de rendimiento
 						</Text>
@@ -880,83 +703,303 @@ function DeviceSheet({
 	);
 }
 
+function FieldEditor({
+	field,
+	value,
+	unverified,
+	onChange,
+}: {
+	field: Field;
+	value: string;
+	unverified: boolean;
+	onChange: (value: string) => void;
+}) {
+	const { input } = field;
+	return (
+		<View style={styles.field}>
+			<Text style={styles.fieldLabel}>{field.label}</Text>
+			{unverified ? (
+				<Text style={styles.unverifiedText}>
+					No verificado en el texto original
+				</Text>
+			) : null}
+			{input.kind === "readonly" ? (
+				<Text style={styles.fieldValue}>{value || "Sin dato"}</Text>
+			) : input.kind === "choice" ? (
+				<View style={styles.options}>
+					{input.options.map((option) => {
+						const on = value === option;
+						return (
+							<PressableBox
+								accessibilityState={{ selected: on }}
+								key={option}
+								onPress={() => onChange(on ? "" : option)}
+								pressedStyle={styles.pressedSoft}
+								style={[styles.option, on && styles.optionOn]}
+							>
+								<Text style={[styles.optionText, on && styles.optionTextOn]}>
+									{option}
+								</Text>
+							</PressableBox>
+						);
+					})}
+				</View>
+			) : (
+				<TextInput
+					accessibilityLabel={field.label}
+					keyboardType={input.kind === "number" ? "decimal-pad" : "default"}
+					onChangeText={onChange}
+					placeholder={input.kind === "date" ? "AAAA-MM-DD" : "Sin dato"}
+					placeholderTextColor="#6F8574"
+					style={[styles.fieldInput, unverified && styles.fieldInputFlag]}
+					value={value}
+				/>
+			)}
+		</View>
+	);
+}
+
+function DetailSheet({
+	mode,
+	row,
+	source,
+	bottomInset,
+	onClose,
+	onSave,
+	onDelete,
+}: {
+	mode: Mode;
+	row: SheetRow;
+	source: string;
+	bottomInset: number;
+	onClose: () => void;
+	onSave: (edits: ReadonlyArray<readonly [string, string]>) => void;
+	onDelete: () => void;
+}) {
+	const [edits, setEdits] = useState<Record<string, string>>({});
+	const [showSource, setShowSource] = useState(false);
+	const original = (key: string) => cellText(row.cells[key]);
+	const changed = Object.entries(edits).filter(
+		([key, value]) => value !== original(key),
+	);
+	const fields = mode.fields.filter(
+		(field) =>
+			field.input.kind !== "readonly" || original(field.key) !== source,
+	);
+	return (
+		<Modal
+			animationType="slide"
+			navigationBarTranslucent
+			onRequestClose={onClose}
+			statusBarTranslucent
+			transparent
+			visible
+		>
+			<KeyboardAvoidingView behavior="padding" style={styles.sheetScreen}>
+				<Pressable
+					accessibilityLabel="Cerrar"
+					onPress={onClose}
+					style={[StyleSheet.absoluteFill, styles.backdrop]}
+				/>
+				<View
+					style={[
+						styles.sheet,
+						styles.detailSheet,
+						{ paddingBottom: bottomInset + 14 },
+					]}
+				>
+					<ScrollView
+						contentContainerStyle={styles.detailContent}
+						keyboardShouldPersistTaps="handled"
+					>
+						<Text style={styles.eyebrow}>{mode.sheetTitle.toUpperCase()}</Text>
+						{row.factors ? (
+							<View style={styles.factors}>
+								<Text style={styles.factorsTitle}>
+									Confianza {cellText(row.cells.confianza)}
+								</Text>
+								<Text style={styles.factorsText}>{row.factors}</Text>
+							</View>
+						) : null}
+						{fields.map((field) => (
+							<FieldEditor
+								field={field}
+								key={field.key}
+								onChange={(value) =>
+									setEdits((current) => ({ ...current, [field.key]: value }))
+								}
+								unverified={row.unverified.includes(field.key)}
+								value={edits[field.key] ?? original(field.key)}
+							/>
+						))}
+						<PressableBox
+							accessibilityState={{ expanded: showSource }}
+							onPress={() => setShowSource((open) => !open)}
+							pressedStyle={styles.pressedSoft}
+							style={styles.textButton}
+						>
+							<Text style={styles.textButtonLabel}>
+								{showSource ? "Ocultar texto original" : "Ver texto original"}
+							</Text>
+						</PressableBox>
+						{showSource ? (
+							<View style={styles.exampleQuote}>
+								<Text style={styles.exampleQuoteText}>{source}</Text>
+							</View>
+						) : null}
+						<PressableBox
+							accessibilityLabel="Eliminar esta fila"
+							onPress={onDelete}
+							pressedStyle={styles.pressedSoft}
+							style={styles.textButton}
+						>
+							<Text style={styles.textButtonDanger}>Eliminar fila</Text>
+						</PressableBox>
+					</ScrollView>
+					<View style={styles.detailActions}>
+						<PressableBox
+							onPress={onClose}
+							pressedStyle={styles.pressedSoft}
+							style={styles.secondaryButton}
+						>
+							<Text style={styles.secondaryText}>Cerrar</Text>
+						</PressableBox>
+						<PressableBox
+							disabled={changed.length === 0}
+							onPress={() => onSave(changed)}
+							pressedStyle={styles.pressedStrong}
+							style={[
+								styles.primaryButton,
+								styles.flexCopy,
+								changed.length === 0 && styles.buttonOff,
+							]}
+						>
+							<Text
+								style={[
+									styles.primaryText,
+									changed.length === 0 && styles.buttonOffText,
+								]}
+							>
+								Guardar cambios
+							</Text>
+						</PressableBox>
+					</View>
+				</View>
+			</KeyboardAvoidingView>
+		</Modal>
+	);
+}
+
 function Assistant() {
 	const recorder = useAudioRecorder(RECORDING_OPTIONS);
 	const insets = useSafeAreaInsets();
-	const [boot] = useState(bootVisits);
-	const [visits, setVisits] = useState(boot.visits);
-	const [phase, setPhase] = useState<Phase>({ kind: "booting" });
-	const [focus, setFocus] = useState<Focus | null>(null);
-	const [closedQuestions, setClosedQuestions] = useState<ReadonlySet<string>>(
-		() => new Set(),
+	const [boot] = useState(bootLedgers);
+	const [ledgers, setLedgers] = useState<Ledgers>(boot.ledgers);
+	const ledgersRef = useRef<Ledgers>(boot.ledgers);
+	const [modeId, setModeId] = useState<ModeId>(MODE_IDS[0]);
+	const [drafts, setDrafts] = useState<Record<ModeId, string>>(() =>
+		byMode((id) => composerStores[id].load()),
 	);
-	const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
-	const [sheetOpen, setSheetOpen] = useState(false);
-	const [draft, setDraft] = useState<string | null>(null);
-	const [recordingSeconds, setRecordingSeconds] = useState(0);
-	const [level, setLevel] = useState(0);
-	const visitsRef = useRef(boot.visits);
+	const savedDrafts = useRef(drafts);
+	const [phase, setPhase] = useState<Capture>({ kind: "booting" });
 	// Handlers read the phase from here: two taps in one frame both see the stale render value.
-	const phaseRef = useRef<Phase>(phase);
+	const phaseRef = useRef<Capture>(phase);
+	const [focus, setFocus] = useState<Focus | null>(null);
+	const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set());
+	const [undo, setUndo] = useState<Undo | null>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
+	const [menuTop, setMenuTop] = useState(0);
+	const [deviceOpen, setDeviceOpen] = useState(false);
+	const [detailKey, setDetailKey] = useState<string | null>(null);
+	const [seconds, setSeconds] = useState(0);
+	const [level, setLevel] = useState(0);
 	const alive = useRef(true);
-	const scrollRef = useRef<ScrollView>(null);
+	const attempt = useRef(0);
+	const stopRef = useRef<() => void>(() => {});
 	const pulse = useRef(new Animated.Value(1)).current;
 
-	const now = Date.now();
-	const bases = useMemo(() => installedBase(visits, Date.now()), [visits]);
-	const summary = useMemo(() => fleetSummary(bases), [bases]);
-	const focused = focus
-		? (visits.find((visit) => visit.id === focus.visitId) ?? null)
-		: null;
-	const asked = focused?.extraction ? nextQuestion(focused.extraction) : null;
+	const mode = MODES[modeId];
+	const ledger = ledgers[modeId];
+	const draft = drafts[modeId];
+	const view = useMemo(() => mode.view(ledger, new Date()), [mode, ledger]);
+	const rows = useMemo(() => sheetRows(view), [view]);
+	const summary = useMemo(
+		() => mode.summary(ledger, new Date()),
+		[mode, ledger],
+	);
+	const pending = ledger.filter((record) => record.extraction === null);
+	const extractingId = phase.kind === "extracting" ? phase.recordId : null;
+	const focused =
+		focus?.mode === modeId
+			? (ledger.find((record) => record.id === focus.recordId) ?? null)
+			: null;
+	const asked =
+		focused && extractingId !== focused.id ? mode.ask(focused) : null;
 	const question =
-		focused && asked && !closedQuestions.has(questionKey(focused.id, asked))
+		focused && asked && !closed.has(questionKey(focused.id, asked))
 			? asked
 			: null;
-	const target: Target =
-		focused && question
-			? { kind: "answer", visitId: focused.id, question }
-			: { kind: "new" };
-	const pending = visits
-		.filter((visit) => !visit.extraction?.cliente && visit.id !== focused?.id)
-		.sort((a, b) => b.at - a.at);
 	const idle = isIdle(phase);
-	const isRecording = phase.kind === "recording";
-	const extractingId = phase.kind === "extracting" ? phase.visitId : null;
+	const recording = phase.kind === "recording";
+	const locked = LOCKED_PHASES.has(phase.kind);
 	const status = statusFor(phase);
+	const detailRow = detailKey
+		? (rows.find((row) => row.key === detailKey) ?? null)
+		: null;
+	const detailSource = detailRow
+		? (ledger.find((record) => record.id === detailRow.recordId)?.source ?? "")
+		: "";
+	const canAdd = idle && draft.trim() !== "";
 
-	const go = useCallback((next: Phase) => {
+	const go = useCallback((next: Capture) => {
 		phaseRef.current = next;
 		setPhase(next);
 	}, []);
 
-	const loadModels = useCallback(async () => {
-		try {
-			await engine.load((role, progress) => {
-				if (alive.current) go({ kind: "loading", role, progress });
-			});
-			if (alive.current) go({ kind: "ready" });
-		} catch (error) {
-			if (alive.current)
-				go({
-					kind: "error",
-					message: errorMessage(error),
-					scope: { kind: "models" },
+	const prepare = useCallback(
+		async (id: ModeId) => {
+			attempt.current += 1;
+			const mine = attempt.current;
+			const current = () => alive.current && mine === attempt.current;
+			go({ kind: "booting" });
+			try {
+				await engine.prepare(id, (model, progress) => {
+					if (current()) go({ kind: "loading", model, progress });
 				});
-		}
-	}, [go]);
+				if (current()) go({ kind: "ready" });
+			} catch (error) {
+				if (current())
+					go({
+						kind: "error",
+						message: errorMessage(error),
+						scope: { kind: "models" },
+					});
+			}
+		},
+		[go],
+	);
 
 	useEffect(() => {
 		alive.current = true;
-		void loadModels();
+		void prepare(MODE_IDS[0]);
 		return () => {
 			alive.current = false;
-			void engine.unload();
+			void engine.release();
 		};
-	}, [loadModels]);
+	}, [prepare]);
 
 	useEffect(() => {
-		if (!isRecording) {
+		const timer = setTimeout(() => {
+			for (const id of MODE_IDS)
+				if (savedDrafts.current[id] !== drafts[id])
+					composerStores[id].save(drafts[id]);
+			savedDrafts.current = drafts;
+		}, 400);
+		return () => clearTimeout(timer);
+	}, [drafts]);
+
+	useEffect(() => {
+		if (!recording) {
 			pulse.stopAnimation();
 			pulse.setValue(1);
 			return;
@@ -964,7 +1007,7 @@ function Assistant() {
 		const animation = Animated.loop(
 			Animated.sequence([
 				Animated.timing(pulse, {
-					toValue: 1.06,
+					toValue: 1.08,
 					duration: 850,
 					easing: Easing.inOut(Easing.ease),
 					useNativeDriver: true,
@@ -979,135 +1022,252 @@ function Assistant() {
 		);
 		animation.start();
 		return () => animation.stop();
-	}, [isRecording, pulse]);
+	}, [recording, pulse]);
 
 	useEffect(() => {
-		if (!isRecording) {
+		if (!recording) {
 			setLevel(0);
 			return;
 		}
 		const started = Date.now();
 		const interval = setInterval(() => {
 			const elapsed = Date.now() - started;
+			let total = Math.floor(elapsed / 1000);
 			if (uiOnly) {
-				setRecordingSeconds(Math.floor(elapsed / 1000));
 				const t = elapsed / 1000;
 				const wave =
 					0.4 +
 					0.3 * Math.sin(t * 5.1) * Math.sin(t * 1.7) +
 					0.2 * Math.sin(t * 11);
 				setLevel(Math.max(0.05, Math.min(1, wave)));
-				return;
+			} else {
+				const recorderStatus = recorder.getStatus();
+				if (typeof recorderStatus.durationMillis === "number")
+					total = Math.floor(recorderStatus.durationMillis / 1000);
+				if (typeof recorderStatus.metering === "number")
+					setLevel(
+						Math.max(0, Math.min(1, (recorderStatus.metering + 60) / 60)),
+					);
 			}
-			const recorderStatus = recorder.getStatus();
-			setRecordingSeconds(
-				typeof recorderStatus.durationMillis === "number"
-					? Math.floor(recorderStatus.durationMillis / 1000)
-					: Math.floor(elapsed / 1000),
-			);
-			const metering = recorderStatus.metering;
-			if (typeof metering === "number")
-				setLevel(Math.max(0, Math.min(1, (metering + 60) / 60)));
+			setSeconds(total);
+			if (total >= MAX_RECORDING_SECONDS) stopRef.current();
 		}, 100);
 		return () => clearInterval(interval);
-	}, [isRecording, recorder]);
+	}, [recording, recorder]);
 
-	useEffect(() => {
-		if (!focus) return;
-		scrollRef.current?.scrollTo({ animated: true, y: 0 });
-	}, [focus]);
+	const setDraft = (id: ModeId, change: (text: string) => string) =>
+		setDrafts((current) => ({ ...current, [id]: change(current[id]) }));
 
-	const commit = (change: (current: readonly Visit[]) => readonly Visit[]) => {
-		const next = change(visitsRef.current);
-		// Disk first, so a failed save never leaves the screen showing a visit the file lacks.
-		store.save(next);
-		visitsRef.current = next;
-		setVisits(next);
+	const fail = (error: unknown, scope: ErrorScope) =>
+		go({ kind: "error", message: errorMessage(error), scope });
+
+	// Disk first, so a failed save never leaves the screen showing a record the file lacks.
+	const commit = (
+		id: ModeId,
+		change: (records: readonly LooseRecord[]) => readonly LooseRecord[],
+	) => {
+		const next = change(ledgersRef.current[id]);
+		recordStores[id].save(next);
+		const all = { ...ledgersRef.current, [id]: next };
+		ledgersRef.current = all;
+		setLedgers(all);
 	};
 
-	const extractVisit = async (visit: Visit) => {
-		go({ kind: "extracting", visitId: visit.id });
+	const extract = async (id: ModeId, record: LooseRecord) => {
+		go({ kind: "extracting", recordId: record.id });
 		try {
-			const extraction = await engine.extract(visit.said);
+			const filled = await engine.extract(id, record.source);
 			if (!alive.current) return;
-			if (!extraction) {
+			if (filled === null) {
 				go({
 					kind: "error",
-					message: visit.extraction
-						? "Guardé tu respuesta, pero no pude ordenarla."
-						: "Guardé tus palabras, pero no pude ordenarlas.",
-					scope: { kind: "extract", visitId: visit.id },
+					message:
+						record.extraction === null
+							? "Guardé tu texto, pero no encontré qué poner en la hoja. Reintenta o elimínalo."
+							: "Guardé tu respuesta, pero no pude volver a llenar la hoja.",
+					scope: { kind: "extract", recordId: record.id },
 				});
 				return;
 			}
-			commit((current) =>
-				current.map((found) =>
-					found.id === visit.id ? { ...found, extraction } : found,
+			commit(id, (records) =>
+				records.map((found) =>
+					found.id === record.id ? { ...found, ...filled } : found,
 				),
 			);
 			go({ kind: "ready" });
 		} catch (error) {
-			go({
-				kind: "error",
-				message: errorMessage(error),
-				scope: { kind: "extract", visitId: visit.id },
-			});
+			if (alive.current) fail(error, { kind: "extract", recordId: record.id });
 		}
 	};
 
-	const capture = async (to: Target, said: string) => {
+	const submit = () => {
+		const text = draft.trim();
+		if (!text || !isIdle(phaseRef.current)) return;
+		const id = modeId;
+		const before = ledgersRef.current[id];
 		try {
-			const answered =
-				to.kind === "answer"
-					? visitsRef.current.find((found) => found.id === to.visitId)
-					: undefined;
-			if (to.kind === "answer" && answered) {
-				const visit = {
-					...answered,
-					said: appendAnswer(answered.said, to.question, said),
+			if (focused && question) {
+				const key = questionKey(focused.id, question);
+				const answered = {
+					...focused,
+					source: mode.answer(focused.source, question, text),
 				};
-				commit((current) =>
-					current.map((found) => (found.id === visit.id ? visit : found)),
+				commit(id, (records) =>
+					records.map((found) => (found.id === answered.id ? answered : found)),
 				);
-				// An answer that fills nothing would otherwise bring the same question straight back.
-				setClosedQuestions((current) =>
-					new Set(current).add(questionKey(visit.id, to.question)),
-				);
-				setFocus({
-					visitId: visit.id,
-					undo: { kind: "restore", visit: answered, question: to.question },
+				setClosed((current) => new Set(current).add(key));
+				setUndo({
+					mode: id,
+					before,
+					label: "Respuesta agregada",
+					text,
+					reopen: key,
 				});
-				await extractVisit(visit);
+				setDraft(id, () => "");
+				void extract(id, answered);
 				return;
 			}
-			const visit: Visit = {
+			const record: LooseRecord = {
 				id: makeId(),
 				at: Date.now(),
-				said,
+				source: text,
 				extraction: null,
+				unverified: [],
 			};
-			commit((current) => [...current, visit]);
-			setFocus({ visitId: visit.id, undo: { kind: "delete" } });
-			await extractVisit(visit);
-		} catch (error) {
-			go({
-				kind: "error",
-				message: errorMessage(error),
-				scope: { kind: "capture" },
+			commit(id, (records) => [...records, record]);
+			setFocus({ mode: id, recordId: record.id });
+			setUndo({
+				mode: id,
+				before,
+				label: "Agregado a la hoja",
+				text,
+				reopen: null,
 			});
+			setDraft(id, () => "");
+			void extract(id, record);
+		} catch (error) {
+			fail(error, { kind: "capture" });
 		}
 	};
 
-	const retryExtraction = (visitId: string) => {
+	const runUndo = () => {
+		if (!undo || !isIdle(phaseRef.current)) return;
+		try {
+			commit(undo.mode, () => undo.before);
+			const { text, reopen } = undo;
+			if (text !== null)
+				setDraft(undo.mode, (current) => (current.trim() ? current : text));
+			if (reopen !== null)
+				setClosed((current) => {
+					const next = new Set(current);
+					next.delete(reopen);
+					return next;
+				});
+			setUndo(null);
+			go({ kind: "ready" });
+		} catch (error) {
+			fail(error, { kind: "capture" });
+		}
+	};
+
+	const retry = (recordId: string) => {
 		if (!isIdle(phaseRef.current)) return;
-		const visit = visitsRef.current.find((found) => found.id === visitId);
-		if (visit) void extractVisit(visit);
+		const record = ledgersRef.current[modeId].find(
+			(found) => found.id === recordId,
+		);
+		if (record) void extract(modeId, record);
+	};
+
+	const removeWithUndo = (
+		change: (records: readonly LooseRecord[]) => readonly LooseRecord[],
+	) => {
+		const id = modeId;
+		const before = ledgersRef.current[id];
+		try {
+			commit(id, change);
+			setUndo({
+				mode: id,
+				before,
+				label: "Eliminado",
+				text: null,
+				reopen: null,
+			});
+			setDetailKey(null);
+			if (phaseRef.current.kind === "error") go({ kind: "ready" });
+		} catch (error) {
+			fail(error, { kind: "capture" });
+		}
+	};
+
+	const confirmDeleteRecord = (record: LooseRecord) =>
+		Alert.alert("¿Eliminar este texto?", "Se borra del teléfono.", [
+			{ text: "Cancelar", style: "cancel" },
+			{
+				text: "Eliminar",
+				style: "destructive",
+				onPress: () =>
+					removeWithUndo((records) =>
+						records.filter((found) => found.id !== record.id),
+					),
+			},
+		]);
+
+	const confirmDeleteRow = (row: SheetRow) =>
+		Alert.alert("¿Eliminar esta fila?", "Se quita de la hoja.", [
+			{ text: "Cancelar", style: "cancel" },
+			{
+				text: "Eliminar",
+				style: "destructive",
+				onPress: () =>
+					removeWithUndo((records) =>
+						records.flatMap((record) => {
+							if (record.id !== row.recordId) return [record];
+							const left = mode.remove(record, row.index);
+							return left === null ? [] : [left];
+						}),
+					),
+			},
+		]);
+
+	const saveRow = (
+		row: SheetRow,
+		edits: ReadonlyArray<readonly [string, string]>,
+	) => {
+		try {
+			commit(modeId, (records) =>
+				records.map((record) =>
+					record.id !== row.recordId
+						? record
+						: edits.reduce(
+								(edited, [key, value]) =>
+									mode.edit(
+										edited,
+										row.index,
+										key,
+										value.trim() === "" ? null : value,
+									),
+								record,
+							),
+				),
+			);
+			setUndo(null);
+			setDetailKey(null);
+		} catch (error) {
+			fail(error, { kind: "capture" });
+		}
+	};
+
+	const pickMode = (id: ModeId) => {
+		setMenuOpen(false);
+		if (id === modeId || LOCKED_PHASES.has(phaseRef.current.kind)) return;
+		setModeId(id);
+		setDetailKey(null);
+		void prepare(id);
 	};
 
 	const startRecording = async () => {
 		if (!isIdle(phaseRef.current)) return;
-		const to = target;
-		go({ kind: "starting", target: to });
+		go({ kind: "starting" });
 		try {
 			if (!uiOnly) {
 				const permission = await requestRecordingPermissionsAsync();
@@ -1121,33 +1281,26 @@ function Assistant() {
 				recorder.record();
 			}
 			if (!alive.current) return;
-			setRecordingSeconds(0);
-			go({ kind: "recording", target: to });
+			setSeconds(0);
+			go({ kind: "recording" });
 		} catch (error) {
-			go({
-				kind: "error",
-				message: errorMessage(error),
-				scope: { kind: "capture" },
-			});
+			fail(error, { kind: "capture" });
 		}
 	};
 
 	const stopRecording = async () => {
-		const current = phaseRef.current;
-		if (current.kind !== "recording") return;
-		const to = current.target;
-		go({ kind: "transcribing", target: to });
+		if (phaseRef.current.kind !== "recording") return;
+		const id = modeId;
+		go({ kind: "transcribing" });
 		try {
 			let audioPath: string | null = null;
 			if (!uiOnly) {
 				await recorder.stop();
 				audioPath = recorder.uri ? toLocalPath(recorder.uri) : null;
 			}
-			const said = await engine.transcribe(
-				audioPath,
-				to.kind === "answer" ? to.question : null,
-			);
-			if (!isMeaningfulTranscript(said)) {
+			const heard = (await engine.transcribe(audioPath, id)).trim();
+			if (!alive.current) return;
+			if (!isMeaningfulTranscript(heard)) {
 				go({
 					kind: "error",
 					message: "No escuché voz. Acerca el teléfono e inténtalo otra vez.",
@@ -1155,162 +1308,112 @@ function Assistant() {
 				});
 				return;
 			}
-			await capture(to, said);
-		} catch (error) {
-			go({
-				kind: "error",
-				message: errorMessage(error),
-				scope: { kind: "capture" },
-			});
-		}
-	};
-
-	const submitDraft = () => {
-		const said = draft?.trim();
-		if (!said || !isIdle(phaseRef.current)) return;
-		setDraft(null);
-		void capture(target, said);
-	};
-
-	const undo = () => {
-		if (!focus || !isIdle(phaseRef.current)) return;
-		const { visitId, undo: step } = focus;
-		if (step.kind === "none") return;
-		try {
-			commit((current) =>
-				step.kind === "restore"
-					? current.map((found) => (found.id === visitId ? step.visit : found))
-					: current.filter((found) => found.id !== visitId),
+			setDraft(id, (current) =>
+				current.trim() ? `${current.trimEnd()} ${heard}` : heard,
 			);
-			if (step.kind === "restore") {
-				setClosedQuestions((current) => {
-					const next = new Set(current);
-					next.delete(questionKey(visitId, step.question));
-					return next;
-				});
-				setFocus({ visitId, undo: { kind: "none" } });
-			} else {
-				setFocus(null);
-			}
 			go({ kind: "ready" });
 		} catch (error) {
-			go({
-				kind: "error",
-				message: errorMessage(error),
-				scope: { kind: "capture" },
-			});
+			fail(error, { kind: "capture" });
 		}
 	};
+	stopRef.current = () => void stopRecording();
 
-	const skip = () => {
-		if (!focused || !question) return;
-		const key = questionKey(focused.id, question);
-		setClosedQuestions((current) => new Set(current).add(key));
-	};
-
-	const shareCsv = async () => {
-		const file = new File(Paths.cache, "base-instalada.csv");
+	const exportSheet = async () => {
 		try {
+			const file = new File(Paths.cache, mode.csvName);
 			if (file.exists) file.delete();
 			file.create();
-			file.write(toCsv(bases));
-		} catch {
-			return;
+			file.write(mode.csv(ledgersRef.current[modeId], new Date()));
+			await shareFile(
+				file,
+				"text/csv",
+				"public.comma-separated-values-text",
+				"Exportar a Google Sheets",
+			);
+		} catch (error) {
+			fail(error, { kind: "capture" });
 		}
-		await shareFile(file, "text/csv", "public.comma-separated-values-text");
+	};
+
+	const skipQuestion = () => {
+		if (!focused || !question) return;
+		const key = questionKey(focused.id, question);
+		setClosed((current) => new Set(current).add(key));
 	};
 
 	const errorAction =
 		phase.kind !== "error"
 			? null
 			: phase.scope.kind === "models"
-				? { label: "Reintentar", run: () => void loadModels() }
+				? { label: "Reintentar", run: () => void prepare(modeId) }
 				: phase.scope.kind === "extract"
 					? {
-							label: "Ordenar de nuevo",
+							label: "Reintentar",
 							run: (
-								(visitId: string) => () =>
-									retryExtraction(visitId)
-							)(phase.scope.visitId),
+								(recordId: string) => () =>
+									retry(recordId)
+							)(phase.scope.recordId),
 						}
 					: null;
 
 	return (
 		<KeyboardAvoidingView behavior="padding" style={styles.screen}>
 			<StatusBar style="light" />
-			<ScrollView
-				contentContainerStyle={[
-					styles.content,
-					{ paddingTop: insets.top + 12 },
-				]}
-				keyboardShouldPersistTaps="handled"
-				ref={scrollRef}
-				showsVerticalScrollIndicator={false}
+			<View
+				onLayout={(event) =>
+					setMenuTop(
+						event.nativeEvent.layout.y + event.nativeEvent.layout.height - 6,
+					)
+				}
+				style={[styles.header, { paddingTop: insets.top + 8 }]}
 			>
-				<View style={styles.header}>
-					<View style={styles.flexCopy}>
-						<Text style={styles.eyebrow}>BASE INSTALADA</Text>
-						<Text style={styles.title}>Equipos por cliente</Text>
-					</View>
-					<PressableBox
-						accessibilityLabel="Ver los modelos que corren en el dispositivo"
-						hitSlop={8}
-						onPress={() => setSheetOpen(true)}
-						pressedStyle={styles.pressedSoft}
-						style={styles.localBadge}
-					>
-						<View style={styles.localDot} />
-						<Text style={styles.localText}>En el dispositivo</Text>
-					</PressableBox>
-				</View>
+				<PressableBox
+					accessibilityHint="Cambia entre Finanzas y Salud"
+					accessibilityLabel={`Hoja ${mode.label}`}
+					accessibilityState={{ expanded: menuOpen }}
+					onPress={() => setMenuOpen((open) => !open)}
+					pressedStyle={styles.pressedSoft}
+					style={styles.switcher}
+				>
+					<Text numberOfLines={1} style={styles.title}>
+						{mode.label}
+					</Text>
+					<Text style={styles.chevron}>⌄</Text>
+				</PressableBox>
+				<PressableBox
+					accessibilityLabel="Ver los modelos que corren en el dispositivo"
+					onPress={() => setDeviceOpen(true)}
+					pressedStyle={styles.pressedSoft}
+					style={styles.localBadge}
+				>
+					<View style={styles.localDot} />
+					<Text style={styles.localText}>En el dispositivo</Text>
+				</PressableBox>
+			</View>
 
-				{status ? (
-					<View
-						style={[
-							styles.status,
-							status.tone === "error" && styles.statusError,
-						]}
-					>
-						<View style={styles.statusRow}>
-							{status.tone === "busy" ? (
-								<ActivityIndicator color={ACCENT} size="small" />
-							) : (
-								<View
+			{status ? (
+				<View
+					style={[styles.status, status.tone === "error" && styles.statusError]}
+				>
+					<View style={styles.statusRow}>
+						{status.tone === "busy" ? (
+							<ActivityIndicator color={ACCENT} size="small" />
+						) : (
+							<View style={styles.statusDotError} />
+						)}
+						<View style={styles.statusCopy}>
+							<Text style={styles.statusTitle}>{status.title}</Text>
+							{status.caption ? (
+								<Text
 									style={[
-										styles.statusDot,
-										status.tone === "error"
-											? styles.statusDotError
-											: styles.statusDotLive,
+										styles.statusCaption,
+										status.tone === "error" && styles.statusCaptionError,
 									]}
-								/>
-							)}
-							<View style={styles.statusCopy}>
-								<Text style={styles.statusTitle}>{status.title}</Text>
-								{status.caption ? (
-									<Text
-										style={[
-											styles.statusCaption,
-											status.tone === "error" && styles.statusCaptionError,
-										]}
-									>
-										{status.caption}
-									</Text>
-								) : null}
-							</View>
+								>
+									{status.caption}
+								</Text>
+							) : null}
 						</View>
-						{status.progress !== null ? (
-							<View style={styles.progressBlock}>
-								<View style={styles.progressTrack}>
-									<View
-										style={[
-											styles.progressFill,
-											{ width: `${status.progress}%` },
-										]}
-									/>
-								</View>
-								<Text style={styles.progressValue}>{status.progress}%</Text>
-							</View>
-						) : null}
 						{errorAction ? (
 							<PressableBox
 								onPress={errorAction.run}
@@ -1321,179 +1424,215 @@ function Assistant() {
 							</PressableBox>
 						) : null}
 					</View>
-				) : null}
+					{status.progress !== null ? (
+						<View style={styles.progressBlock}>
+							<View style={styles.progressTrack}>
+								<View
+									style={[
+										styles.progressFill,
+										{ width: `${status.progress}%` },
+									]}
+								/>
+							</View>
+							<Text style={styles.progressValue}>{status.progress}%</Text>
+						</View>
+					) : null}
+				</View>
+			) : null}
 
+			<ScrollView
+				contentContainerStyle={styles.content}
+				keyboardShouldPersistTaps="handled"
+				showsVerticalScrollIndicator={false}
+			>
 				{boot.quarantined ? (
 					<View style={styles.notice}>
 						<Text style={styles.noticeText}>
-							No pude leer lo que había guardado. Aparté ese archivo sin
-							borrarlo y empecé de cero.
+							No pude leer una hoja guardada. Aparté ese archivo sin borrarlo y
+							empecé esa hoja de cero.
 						</Text>
 					</View>
 				) : null}
 
-				{bases.length > 0 ? (
-					<FleetBar onShare={() => void shareCsv()} summary={summary} />
-				) : null}
+				<SummaryStrip items={summary} />
 
-				{focused && focus ? (
-					<CaptureCard
-						canAct={idle}
-						extracting={extractingId === focused.id}
-						key={focused.id}
-						onRetry={() => retryExtraction(focused.id)}
-						onSkip={skip}
-						onUndo={focus.undo.kind === "none" ? null : undo}
-						question={question}
-						visit={focused}
-					/>
-				) : null}
-
-				{pending.map((visit) => (
+				{pending.map((record) => (
 					<PendingCard
 						canAct={idle}
-						extracting={extractingId === visit.id}
-						key={visit.id}
-						now={now}
-						onComplete={() =>
-							setFocus({ visitId: visit.id, undo: { kind: "none" } })
-						}
-						onRetry={() => retryExtraction(visit.id)}
-						visit={visit}
+						extracting={extractingId === record.id}
+						key={record.id}
+						onDelete={() => confirmDeleteRecord(record)}
+						onRetry={() => retry(record.id)}
+						record={record}
 					/>
 				))}
 
-				{bases.map((client) => (
-					<ClientCard
-						client={client}
-						expandedUnit={expandedUnit}
-						key={client.key}
-						now={now}
-						onToggleUnit={(key) =>
-							setExpandedUnit((current) => (current === key ? null : key))
-						}
-					/>
-				))}
-
-				{visits.length === 0 ? <EmptyState /> : null}
+				<View style={styles.sheetCard}>
+					<View style={styles.sheetHead}>
+						<View style={styles.flexCopy}>
+							<Text style={styles.sheetTitle}>{mode.sheetTitle}</Text>
+							<Text style={styles.sheetCount}>
+								{count(rows.length, "fila", "filas")}
+							</Text>
+						</View>
+						<PressableBox
+							accessibilityLabel={`Exportar ${mode.csvName} a Google Sheets`}
+							disabled={rows.length === 0}
+							onPress={() => void exportSheet()}
+							pressedStyle={styles.pressedStrong}
+							style={[
+								styles.exportButton,
+								rows.length === 0 && styles.buttonOff,
+							]}
+						>
+							<Text
+								style={[
+									styles.exportText,
+									rows.length === 0 && styles.buttonOffText,
+								]}
+							>
+								Exportar a Google Sheets
+							</Text>
+						</PressableBox>
+					</View>
+					{rows.length > 0 ? (
+						<SheetBody onOpen={(row) => setDetailKey(row.key)} view={view} />
+					) : (
+						<EmptyState mode={mode} />
+					)}
+				</View>
 			</ScrollView>
 
 			<View
 				style={[
 					styles.footer,
-					{ paddingBottom: Math.max(insets.bottom, 10) + 10 },
+					{ paddingBottom: Math.max(insets.bottom, 8) + 8 },
 				]}
 			>
-				{draft !== null ? (
-					<>
-						<Text numberOfLines={2} style={styles.footerHint}>
-							{target.kind === "answer"
-								? target.question
-								: "Escribe qué equipos viste"}
+				{question ? (
+					<View style={styles.question}>
+						<Text style={styles.questionText}>{question}</Text>
+						<PressableBox
+							accessibilityLabel="Omitir la pregunta"
+							onPress={skipQuestion}
+							pressedStyle={styles.pressedSoft}
+							style={styles.textButton}
+						>
+							<Text style={styles.textButtonMuted}>Omitir</Text>
+						</PressableBox>
+					</View>
+				) : null}
+				{undo && undo.mode === modeId ? (
+					<View style={styles.undoBar}>
+						<Text style={styles.undoText}>{undo.label}</Text>
+						<PressableBox
+							accessibilityLabel="Deshacer"
+							disabled={!idle}
+							onPress={runUndo}
+							pressedStyle={styles.pressedSoft}
+							style={styles.textButton}
+						>
+							<Text style={[styles.textButtonLabel, !idle && styles.dimmed]}>
+								Deshacer
+							</Text>
+						</PressableBox>
+					</View>
+				) : null}
+				{recording ? (
+					<View style={styles.recordingLine}>
+						<LevelMeter level={level} />
+						<Text style={styles.recordingClock}>
+							{formatClock(seconds)} / {formatClock(MAX_RECORDING_SECONDS)}
 						</Text>
-						<View style={styles.composer}>
-							<TextInput
-								accessibilityLabel="Texto de la visita"
-								autoFocus
-								onChangeText={setDraft}
-								onSubmitEditing={submitDraft}
-								placeholder={
-									target.kind === "answer"
-										? "Tu respuesta"
-										: "Hospital, equipos, marcas"
-								}
-								placeholderTextColor="#6F8574"
-								returnKeyType="send"
-								style={styles.input}
-								value={draft}
-							/>
-							<PressableBox
-								accessibilityLabel="Enviar"
-								disabled={!draft.trim() || !idle}
-								onPress={submitDraft}
-								pressedStyle={styles.pressedStrong}
-								style={[
-									styles.sendButton,
-									(!draft.trim() || !idle) && styles.buttonDisabled,
-								]}
-							>
-								<Text style={styles.sendGlyph}>↑</Text>
-							</PressableBox>
-							<PressableBox
-								accessibilityLabel="Volver al micrófono"
-								onPress={() => setDraft(null)}
-								pressedStyle={styles.pressedSoft}
-								style={styles.ghostButton}
-							>
-								<Text style={styles.ghostGlyph}>×</Text>
-							</PressableBox>
-						</View>
-					</>
-				) : (
-					<>
-						{isRecording ? (
-							<View style={styles.footerStatus}>
-								<LevelMeter level={level} />
-								<Text style={styles.footerTimer}>
-									{formatClock(recordingSeconds)}
-								</Text>
-							</View>
-						) : (
-							<Text style={styles.footerHint}>{hintFor(phase, target)}</Text>
-						)}
-						<View style={styles.footerRow}>
-							<View style={styles.footerSide} />
-							<Animated.View style={{ transform: [{ scale: pulse }] }}>
-								<PressableBox
-									accessibilityLabel={
-										isRecording
-											? "Detener grabación"
-											: target.kind === "answer"
-												? "Responder con voz"
-												: "Grabar una visita"
-									}
-									disabled={!idle && !isRecording}
-									onPress={() =>
-										isRecording ? void stopRecording() : void startRecording()
-									}
-									pressedStyle={styles.pressedStrong}
+					</View>
+				) : null}
+				<TextInput
+					accessibilityLabel={question ?? mode.placeholder}
+					multiline
+					onChangeText={(text) => setDraft(modeId, () => text)}
+					placeholder={question ? "Tu respuesta" : mode.placeholder}
+					placeholderTextColor="#6F8574"
+					scrollEnabled
+					style={styles.input}
+					textAlignVertical="top"
+					value={draft}
+				/>
+				<View style={styles.composerRow}>
+					<Animated.View style={{ transform: [{ scale: pulse }] }}>
+						<PressableBox
+							accessibilityLabel={
+								recording ? "Detener y transcribir" : "Dictar"
+							}
+							disabled={!idle && !recording}
+							onPress={() =>
+								recording ? void stopRecording() : void startRecording()
+							}
+							pressedStyle={styles.pressedStrong}
+							style={[
+								styles.micButton,
+								recording && styles.micButtonRecording,
+								!idle && !recording && styles.buttonOff,
+							]}
+						>
+							{phase.kind === "starting" || phase.kind === "transcribing" ? (
+								<ActivityIndicator color="#0A211D" size="small" />
+							) : (
+								<Text
 									style={[
-										styles.micButton,
-										isRecording && styles.micButtonRecording,
-										!idle && !isRecording && styles.micButtonDisabled,
+										styles.micGlyph,
+										!idle && !recording && styles.buttonOffText,
 									]}
 								>
-									<Text
-										style={[
-											styles.micGlyph,
-											!idle && !isRecording && styles.micGlyphDisabled,
-										]}
-									>
-										{isRecording ? "■" : "●"}
-									</Text>
-								</PressableBox>
-							</Animated.View>
-							<View style={styles.footerSide}>
-								<PressableBox
-									accessibilityLabel="Escribir en vez de hablar"
-									disabled={!idle}
-									onPress={() => setDraft("")}
-									pressedStyle={styles.pressedSoft}
-									style={[styles.ghostButton, !idle && styles.buttonDisabled]}
-								>
-									<Text style={styles.ghostText}>Aa</Text>
-								</PressableBox>
-							</View>
-						</View>
-					</>
-				)}
+									{recording ? "■" : "●"}
+								</Text>
+							)}
+						</PressableBox>
+					</Animated.View>
+					<PressableBox
+						disabled={!canAdd}
+						onPress={submit}
+						pressedStyle={styles.pressedStrong}
+						style={[
+							styles.primaryButton,
+							styles.flexCopy,
+							!canAdd && styles.buttonOff,
+						]}
+					>
+						<Text style={[styles.primaryText, !canAdd && styles.buttonOffText]}>
+							{question ? "Responder" : "Agregar a la hoja"}
+						</Text>
+					</PressableBox>
+				</View>
 			</View>
+
+			{menuOpen ? (
+				<ModeMenu
+					current={modeId}
+					locked={locked}
+					onClose={() => setMenuOpen(false)}
+					onPick={pickMode}
+					top={menuTop}
+				/>
+			) : null}
 
 			<DeviceSheet
 				bottomInset={insets.bottom}
-				onClose={() => setSheetOpen(false)}
-				visible={sheetOpen}
+				onClose={() => setDeviceOpen(false)}
+				visible={deviceOpen}
 			/>
+
+			{detailRow ? (
+				<DetailSheet
+					bottomInset={insets.bottom}
+					key={detailRow.key}
+					mode={mode}
+					onClose={() => setDetailKey(null)}
+					onDelete={() => confirmDeleteRow(detailRow)}
+					onSave={(edits) => saveRow(detailRow, edits)}
+					row={detailRow}
+					source={detailSource}
+				/>
+			) : null}
 		</KeyboardAvoidingView>
 	);
 }
@@ -1508,36 +1647,42 @@ export default function App() {
 
 const styles = StyleSheet.create({
 	screen: { backgroundColor: "#0B0F0E", flex: 1 },
-	content: { gap: 12, paddingBottom: 24, paddingHorizontal: 18 },
+	content: { gap: 12, paddingBottom: 20, paddingHorizontal: 16, paddingTop: 4 },
 	flexCopy: { flex: 1, minWidth: 0 },
+	dimmed: { opacity: 0.4 },
 	header: {
 		alignItems: "center",
 		flexDirection: "row",
 		gap: 10,
 		paddingBottom: 8,
+		paddingHorizontal: 16,
 	},
-	eyebrow: {
-		color: ACCENT,
-		fontSize: 10,
-		fontWeight: "800",
-		letterSpacing: 1.4,
+	switcher: {
+		alignItems: "center",
+		flexDirection: "row",
+		flexShrink: 1,
+		gap: 6,
+		marginRight: "auto",
+		minHeight: 48,
+		paddingRight: 8,
 	},
 	title: {
 		color: "#F1F7EE",
-		fontSize: 25,
+		flexShrink: 1,
+		fontSize: 28,
 		fontWeight: "700",
 		letterSpacing: -0.6,
-		marginTop: 4,
 	},
+	chevron: { color: "#8CA39D", fontSize: 22, marginTop: -8 },
 	localBadge: {
 		alignItems: "center",
 		backgroundColor: "#132020",
 		borderColor: "#27443F",
-		borderRadius: 20,
+		borderRadius: 22,
 		borderWidth: 1,
 		flexDirection: "row",
-		minHeight: 36,
-		paddingHorizontal: 11,
+		minHeight: 44,
+		paddingHorizontal: 12,
 	},
 	localDot: {
 		backgroundColor: ACCENT,
@@ -1546,21 +1691,58 @@ const styles = StyleSheet.create({
 		marginRight: 6,
 		width: 7,
 	},
-	localText: { color: "#BFD9D3", fontSize: 11, fontWeight: "700" },
+	localText: { color: "#BFD9D3", fontSize: 12, fontWeight: "700" },
+	menu: {
+		backgroundColor: "#141C1A",
+		borderColor: "#2A3A36",
+		borderRadius: 16,
+		borderWidth: 1,
+		elevation: 12,
+		left: 12,
+		paddingVertical: 6,
+		position: "absolute",
+		shadowColor: "#000",
+		shadowOffset: { height: 8, width: 0 },
+		shadowOpacity: 0.4,
+		shadowRadius: 18,
+		width: 290,
+	},
+	menuOption: {
+		alignItems: "center",
+		flexDirection: "row",
+		gap: 12,
+		minHeight: 60,
+		paddingHorizontal: 16,
+		paddingVertical: 8,
+	},
+	menuTitle: { color: "#F1F7EE", fontSize: 16, fontWeight: "700" },
+	menuSubtitle: { color: "#8CA39D", fontSize: 13, marginTop: 2 },
+	menuCheck: { color: ACCENT, fontSize: 18, fontWeight: "800", width: 20 },
+	menuHint: {
+		color: "#8CA39D",
+		fontSize: 12,
+		paddingBottom: 8,
+		paddingHorizontal: 16,
+	},
 	status: {
 		backgroundColor: "#111816",
 		borderColor: "#1F2C28",
-		borderRadius: 16,
+		borderRadius: 14,
 		borderWidth: 1,
-		paddingHorizontal: 14,
-		paddingVertical: 12,
+		marginBottom: 8,
+		marginHorizontal: 16,
+		paddingHorizontal: 12,
+		paddingVertical: 10,
 	},
 	statusError: { borderColor: "#6A4A32" },
-	statusRow: { alignItems: "center", flexDirection: "row" },
-	statusDot: { borderRadius: 5, height: 10, width: 10 },
-	statusDotLive: { backgroundColor: "#F6B8A8" },
-	statusDotError: { backgroundColor: "#F0B37A" },
-	statusCopy: { flex: 1, marginLeft: 12 },
+	statusRow: { alignItems: "center", flexDirection: "row", gap: 10 },
+	statusDotError: {
+		backgroundColor: "#F0B37A",
+		borderRadius: 5,
+		height: 10,
+		width: 10,
+	},
+	statusCopy: { flex: 1 },
 	statusTitle: { color: "#EDF5EA", fontSize: 14, fontWeight: "700" },
 	statusCaption: {
 		color: "#9CB3A0",
@@ -1569,7 +1751,7 @@ const styles = StyleSheet.create({
 		marginTop: 2,
 	},
 	statusCaptionError: { color: "#F0B37A" },
-	progressBlock: { alignItems: "center", flexDirection: "row", marginTop: 10 },
+	progressBlock: { alignItems: "center", flexDirection: "row", marginTop: 8 },
 	progressTrack: {
 		backgroundColor: "#22322E",
 		borderRadius: 3,
@@ -1588,13 +1770,12 @@ const styles = StyleSheet.create({
 		textAlign: "right",
 	},
 	retryButton: {
-		alignSelf: "flex-start",
+		alignItems: "center",
 		backgroundColor: "#2E2117",
 		borderRadius: 12,
 		justifyContent: "center",
-		marginTop: 10,
 		minHeight: 44,
-		paddingHorizontal: 16,
+		paddingHorizontal: 14,
 	},
 	retryText: { color: "#F0B37A", fontSize: 13, fontWeight: "700" },
 	notice: {
@@ -1602,19 +1783,43 @@ const styles = StyleSheet.create({
 		borderColor: "#3C4A2E",
 		borderRadius: 14,
 		borderWidth: 1,
-		padding: 13,
+		padding: 12,
 	},
 	noticeText: { color: "#D9CB9C", fontSize: 12, lineHeight: 18 },
-	fleet: { gap: 8, paddingTop: 4 },
-	fleetHead: { alignItems: "center", flexDirection: "row", gap: 10 },
-	fleetLine: {
-		color: "#EDF5EA",
-		flex: 1,
-		fontSize: 14,
-		fontWeight: "700",
-		lineHeight: 20,
+	summary: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+	tile: {
+		backgroundColor: "#111816",
+		borderColor: "#1F2C28",
+		borderRadius: 14,
+		borderWidth: 1,
+		flexGrow: 1,
+		paddingHorizontal: 12,
+		paddingVertical: 9,
 	},
-	csvButton: {
+	tileLabel: { color: "#8CA39D", fontSize: 12, fontWeight: "600" },
+	tileValue: {
+		fontSize: 18,
+		fontVariant: ["tabular-nums"],
+		fontWeight: "800",
+		marginTop: 2,
+	},
+	sheetCard: {
+		backgroundColor: "#0F1614",
+		borderColor: "#22312D",
+		borderRadius: 18,
+		borderWidth: 1,
+		padding: 12,
+	},
+	sheetHead: {
+		alignItems: "center",
+		flexDirection: "row",
+		flexWrap: "wrap",
+		gap: 10,
+		marginBottom: 10,
+	},
+	sheetTitle: { color: "#F1F7EE", fontSize: 18, fontWeight: "700" },
+	sheetCount: { color: "#8CA39D", fontSize: 12, marginTop: 1 },
+	exportButton: {
 		alignItems: "center",
 		backgroundColor: ACCENT,
 		borderRadius: 12,
@@ -1622,86 +1827,47 @@ const styles = StyleSheet.create({
 		minHeight: 44,
 		paddingHorizontal: 14,
 	},
-	csvButtonText: { color: "#0A211D", fontSize: 13, fontWeight: "800" },
-	modalities: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-	modalityChip: {
-		backgroundColor: "#151D1B",
-		borderRadius: 10,
-		paddingHorizontal: 9,
-		paddingVertical: 5,
-	},
-	modalityText: { color: "#A9BDB6", fontSize: 12, fontWeight: "600" },
-	card: {
-		backgroundColor: "#111816",
-		borderColor: "#1F2C28",
-		borderRadius: 18,
-		borderWidth: 1,
-		paddingHorizontal: 14,
-		paddingVertical: 12,
-	},
-	cardExample: { borderStyle: "dashed", opacity: 0.8 },
-	captureCard: { backgroundColor: "#0F1C1A", borderColor: "#2A4A44" },
-	pendingCard: { borderStyle: "dashed", gap: 6 },
-	cardHead: {
-		alignItems: "center",
-		flexDirection: "row",
-		justifyContent: "space-between",
-		minHeight: 44,
-	},
-	cardLabel: {
-		color: "#8CA39D",
-		flexShrink: 1,
-		fontSize: 10,
-		fontWeight: "800",
-		letterSpacing: 1.3,
-	},
-	textButton: {
-		alignItems: "center",
-		justifyContent: "center",
-		minHeight: 44,
-		minWidth: 44,
-		paddingHorizontal: 6,
-	},
-	textButtonLabel: { color: ACCENT, fontSize: 13, fontWeight: "800" },
-	textButtonMuted: { color: "#A9BDB6", fontSize: 13, fontWeight: "700" },
-	disabledText: { opacity: 0.4 },
-	heard: { color: "#C9DAD4", fontSize: 13, lineHeight: 19 },
-	heardLabel: { color: "#8CA39D", fontWeight: "700" },
-	inlineBusy: {
-		alignItems: "center",
+	exportText: { color: "#0A211D", fontSize: 14, fontWeight: "800" },
+	tableHead: {
+		borderBottomColor: "#22312D",
+		borderBottomWidth: 1,
 		flexDirection: "row",
 		gap: 8,
+		paddingBottom: 6,
+	},
+	th: {
+		color: "#8CA39D",
+		fontSize: 11,
+		fontWeight: "800",
+		letterSpacing: 0.6,
+		textTransform: "uppercase",
+	},
+	tr: {
+		alignItems: "center",
+		borderBottomColor: "#1A2522",
+		borderBottomWidth: StyleSheet.hairlineWidth,
+		flexDirection: "row",
+		gap: 8,
+		minHeight: 48,
+		paddingVertical: 8,
+	},
+	td: { color: "#E3EEEA", fontSize: 14, lineHeight: 19 },
+	tdMuted: { color: "#A9BDB6", fontSize: 13 },
+	amount: { fontVariant: ["tabular-nums"], fontWeight: "700" },
+	colDate: { width: 46 },
+	colTitle: { flex: 1.4, minWidth: 0 },
+	colSub: { flex: 1, minWidth: 0 },
+	colAmount: { textAlign: "right", width: 92 },
+	flag: { color: TONE_COLOR.estimated, fontSize: 11, fontWeight: "700" },
+	cards: { gap: 10 },
+	clientCard: {
+		backgroundColor: "#111816",
+		borderColor: "#1F2C28",
+		borderRadius: 14,
+		borderWidth: 1,
+		paddingHorizontal: 12,
 		paddingVertical: 10,
 	},
-	inlineBusyText: { color: "#A9BDB6", fontSize: 13 },
-	captureResult: { marginTop: 10 },
-	unsorted: {
-		alignItems: "center",
-		flexDirection: "row",
-		justifyContent: "space-between",
-		marginTop: 4,
-	},
-	question: {
-		backgroundColor: "#132A26",
-		borderRadius: 14,
-		marginTop: 12,
-		paddingHorizontal: 12,
-		paddingTop: 10,
-	},
-	questionText: {
-		color: "#EDF5EA",
-		fontSize: 15,
-		fontWeight: "700",
-		lineHeight: 21,
-	},
-	questionFoot: {
-		alignItems: "center",
-		flexDirection: "row",
-		justifyContent: "space-between",
-	},
-	questionHint: { color: "#8CA39D", flexShrink: 1, fontSize: 12 },
-	muted: { color: "#8CA39D", fontSize: 13, paddingVertical: 6 },
-	clientHead: { alignItems: "flex-start", flexDirection: "row", gap: 8 },
 	clientName: {
 		color: "#F1F7EE",
 		fontSize: 16,
@@ -1709,83 +1875,32 @@ const styles = StyleSheet.create({
 		lineHeight: 22,
 	},
 	clientMeta: { color: "#8CA39D", fontSize: 12, lineHeight: 17, marginTop: 1 },
-	exampleTag: {
-		borderColor: "#3A5550",
-		borderRadius: 8,
-		borderWidth: 1,
-		paddingHorizontal: 7,
-		paddingVertical: 3,
-	},
-	exampleTagText: {
-		color: "#8CA39D",
-		fontSize: 9,
-		fontWeight: "800",
-		letterSpacing: 1,
-	},
 	unitRow: {
 		borderTopColor: "#1D2926",
 		borderTopWidth: StyleSheet.hairlineWidth,
 		justifyContent: "center",
 		marginTop: 8,
-		minHeight: 44,
+		minHeight: 48,
 		paddingTop: 8,
 	},
-	unitLine: {
-		alignItems: "center",
-		flexDirection: "row",
-		gap: 10,
-		minHeight: 36,
-		paddingVertical: 2,
-	},
+	unitLine: { alignItems: "center", flexDirection: "row", gap: 10 },
 	unitTitle: { color: "#E3EEEA", fontSize: 14, fontWeight: "700" },
 	unitDetail: { color: "#A9BDB6", fontSize: 12, lineHeight: 17, marginTop: 1 },
-	chip: { borderRadius: 9, paddingHorizontal: 8, paddingVertical: 4 },
-	chipText: { fontSize: 11, fontWeight: "700" },
-	tags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 4 },
-	tag: {
-		borderColor: "#3A4744",
-		borderRadius: 7,
+	chip: {
+		borderRadius: 9,
 		borderWidth: 1,
-		paddingHorizontal: 6,
-		paddingVertical: 2,
+		paddingHorizontal: 8,
+		paddingVertical: 3,
 	},
-	tagText: { color: "#A7B0AA", fontSize: 10, fontWeight: "700" },
-	tagRenewal: {
-		backgroundColor: "rgba(243, 162, 122, 0.12)",
-		borderColor: "#6B4535",
-	},
-	tagRenewalText: { color: "#F3A27A" },
-	tagStale: { borderStyle: "dashed" },
-	factors: {
-		backgroundColor: "#0D1412",
-		borderRadius: 10,
-		gap: 3,
-		marginTop: 8,
-		padding: 10,
-	},
-	factorsTitle: { color: "#E3EEEA", fontSize: 13, fontWeight: "700" },
-	factorsText: { color: "#A9BDB6", fontSize: 12, lineHeight: 17 },
-	pendingSaid: { color: "#C9DAD4", fontSize: 13, lineHeight: 19 },
-	pendingAction: {
-		alignItems: "center",
-		alignSelf: "flex-start",
-		justifyContent: "center",
-		minHeight: 44,
-		minWidth: 44,
-	},
-	pendingActionText: { color: ACCENT, fontSize: 13, fontWeight: "800" },
-	empty: { gap: 10, paddingTop: 8 },
-	emptyTitle: {
-		color: "#EDF5EA",
-		fontSize: 17,
-		fontWeight: "700",
-		lineHeight: 23,
-	},
+	chipText: { fontSize: 11, fontWeight: "700" },
+	tags: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
+	empty: { gap: 10, paddingVertical: 4 },
+	emptyTitle: { color: "#EDF5EA", fontSize: 16, fontWeight: "700" },
 	exampleQuote: {
 		backgroundColor: "#132A26",
-		borderRadius: 16,
+		borderRadius: 14,
 		borderTopLeftRadius: 4,
-		padding: 13,
+		padding: 12,
 	},
 	exampleQuoteText: { color: "#D5E6E0", fontSize: 14, lineHeight: 21 },
 	emptyArrow: {
@@ -1794,95 +1909,134 @@ const styles = StyleSheet.create({
 		fontWeight: "700",
 		textAlign: "center",
 	},
+	ghost: { opacity: 0.55 },
+	pendingCard: {
+		backgroundColor: "#111816",
+		borderColor: "#2A4A44",
+		borderRadius: 14,
+		borderStyle: "dashed",
+		borderWidth: 1,
+		gap: 6,
+		paddingHorizontal: 12,
+		paddingVertical: 10,
+	},
+	cardLabel: {
+		color: "#8CA39D",
+		fontSize: 10,
+		fontWeight: "800",
+		letterSpacing: 1.2,
+	},
+	pendingText: { color: "#C9DAD4", fontSize: 14, lineHeight: 20 },
+	pendingActions: { flexDirection: "row", gap: 12 },
+	inlineBusy: {
+		alignItems: "center",
+		flexDirection: "row",
+		gap: 8,
+		minHeight: 44,
+	},
+	inlineBusyText: { color: "#A9BDB6", fontSize: 13 },
+	textButton: {
+		alignItems: "center",
+		alignSelf: "flex-start",
+		justifyContent: "center",
+		minHeight: 44,
+		minWidth: 44,
+		paddingHorizontal: 4,
+	},
+	textButtonLabel: { color: ACCENT, fontSize: 14, fontWeight: "800" },
+	textButtonMuted: { color: "#A9BDB6", fontSize: 14, fontWeight: "700" },
+	textButtonDanger: { color: "#F3A27A", fontSize: 14, fontWeight: "800" },
 	footer: {
 		backgroundColor: "#0D1210",
 		borderTopColor: "#1D2A26",
 		borderTopWidth: 1,
-		paddingHorizontal: 18,
+		gap: 8,
+		paddingHorizontal: 16,
 		paddingTop: 10,
 	},
-	footerHint: {
-		color: "#9CB3A0",
-		fontSize: 12,
-		marginBottom: 8,
-		textAlign: "center",
+	question: {
+		alignItems: "center",
+		backgroundColor: "#132A26",
+		borderRadius: 12,
+		flexDirection: "row",
+		gap: 8,
+		paddingLeft: 12,
+		paddingRight: 8,
 	},
-	footerStatus: {
+	questionText: {
+		color: "#EDF5EA",
+		flex: 1,
+		fontSize: 14,
+		fontWeight: "700",
+		lineHeight: 20,
+		paddingVertical: 8,
+	},
+	undoBar: {
 		alignItems: "center",
 		flexDirection: "row",
-		justifyContent: "center",
-		marginBottom: 8,
+		justifyContent: "space-between",
+		paddingLeft: 4,
 	},
-	footerTimer: {
+	undoText: { color: "#A9BDB6", flexShrink: 1, fontSize: 13 },
+	recordingLine: {
+		alignItems: "center",
+		flexDirection: "row",
+		gap: 12,
+		justifyContent: "center",
+	},
+	recordingClock: {
 		color: "#F6B8A8",
 		fontSize: 13,
 		fontVariant: ["tabular-nums"],
 		fontWeight: "700",
-		marginLeft: 12,
 	},
-	meter: { alignItems: "center", flexDirection: "row", gap: 3, height: 30 },
+	meter: { alignItems: "center", flexDirection: "row", gap: 3, height: 26 },
 	meterBar: { backgroundColor: "#F6B8A8", borderRadius: 2, width: 4 },
-	footerRow: {
-		alignItems: "center",
-		flexDirection: "row",
-		gap: 28,
-		justifyContent: "center",
-	},
-	footerSide: { alignItems: "center", width: 48 },
-	micButton: {
-		alignItems: "center",
-		backgroundColor: ACCENT,
-		borderRadius: 32,
-		elevation: 6,
-		height: 64,
-		justifyContent: "center",
-		shadowColor: ACCENT,
-		shadowOffset: { height: 6, width: 0 },
-		shadowOpacity: 0.2,
-		shadowRadius: 14,
-		width: 64,
-	},
-	micButtonRecording: { backgroundColor: "#F6B8A8", shadowColor: "#F6B8A8" },
-	micButtonDisabled: {
-		backgroundColor: "#1F2B28",
-		elevation: 0,
-		shadowOpacity: 0,
-	},
-	micGlyph: { color: "#0A211D", fontSize: 22, fontWeight: "800" },
-	micGlyphDisabled: { color: "#6F8574" },
-	ghostButton: {
-		alignItems: "center",
-		borderColor: "#2A3A36",
-		borderRadius: 22,
-		borderWidth: 1,
-		height: 44,
-		justifyContent: "center",
-		width: 44,
-	},
-	ghostText: { color: "#BFD9D3", fontSize: 14, fontWeight: "700" },
-	ghostGlyph: { color: "#BFD9D3", fontSize: 22, lineHeight: 24 },
-	buttonDisabled: { opacity: 0.4 },
-	composer: { alignItems: "center", flexDirection: "row", gap: 8 },
 	input: {
 		backgroundColor: "#151D1B",
 		borderColor: "#2A3A36",
-		borderRadius: 22,
+		borderRadius: 16,
 		borderWidth: 1,
 		color: "#EDF5EA",
-		flex: 1,
 		fontSize: 15,
-		minHeight: 44,
-		paddingHorizontal: 16,
+		lineHeight: 21,
+		maxHeight: 132,
+		minHeight: 48,
+		paddingHorizontal: 14,
+		paddingVertical: 12,
 	},
-	sendButton: {
+	composerRow: { alignItems: "center", flexDirection: "row", gap: 10 },
+	micButton: {
 		alignItems: "center",
 		backgroundColor: ACCENT,
-		borderRadius: 22,
-		height: 44,
+		borderRadius: 26,
+		height: 52,
 		justifyContent: "center",
-		width: 44,
+		width: 52,
 	},
-	sendGlyph: { color: "#0A211D", fontSize: 20, fontWeight: "800" },
+	micButtonRecording: { backgroundColor: "#F6B8A8" },
+	micGlyph: { color: "#0A211D", fontSize: 20, fontWeight: "800" },
+	primaryButton: {
+		alignItems: "center",
+		backgroundColor: ACCENT,
+		borderRadius: 14,
+		justifyContent: "center",
+		minHeight: 52,
+		paddingHorizontal: 16,
+	},
+	primaryText: { color: "#0A211D", fontSize: 15, fontWeight: "800" },
+	secondaryButton: {
+		alignItems: "center",
+		borderColor: "#2A3A36",
+		borderRadius: 14,
+		borderWidth: 1,
+		justifyContent: "center",
+		minHeight: 52,
+		paddingHorizontal: 18,
+	},
+	secondaryText: { color: "#BFD9D3", fontSize: 15, fontWeight: "700" },
+	buttonOff: { backgroundColor: "#1F2B28" },
+	buttonOffText: { color: "#6F8574" },
 	sheetScreen: { flex: 1, justifyContent: "flex-end" },
 	backdrop: { backgroundColor: "rgba(0, 0, 0, 0.55)" },
 	sheet: {
@@ -1892,10 +2046,19 @@ const styles = StyleSheet.create({
 		borderTopRightRadius: 22,
 		borderWidth: 1,
 		gap: 12,
-		paddingHorizontal: 20,
-		paddingTop: 20,
+		paddingHorizontal: 18,
+		paddingTop: 18,
 	},
-	sheetTitle: {
+	detailSheet: { maxHeight: "88%" },
+	detailContent: { gap: 12, paddingBottom: 8 },
+	detailActions: { flexDirection: "row", gap: 10 },
+	eyebrow: {
+		color: ACCENT,
+		fontSize: 10,
+		fontWeight: "800",
+		letterSpacing: 1.4,
+	},
+	sheetHeadline: {
 		color: "#EDF5EA",
 		fontSize: 16,
 		fontWeight: "700",
@@ -1921,16 +2084,6 @@ const styles = StyleSheet.create({
 	},
 	modelMeta: { color: "#A9BDB6", fontSize: 12, marginTop: 2 },
 	deviceLine: { color: "#8CA39D", fontSize: 12, lineHeight: 17 },
-	sheetButton: {
-		alignItems: "center",
-		backgroundColor: ACCENT,
-		borderRadius: 14,
-		justifyContent: "center",
-		minHeight: 48,
-	},
-	sheetButtonDisabled: { backgroundColor: "#1F2B28" },
-	sheetButtonText: { color: "#0A211D", fontSize: 14, fontWeight: "800" },
-	sheetButtonTextDisabled: { color: "#6F8574" },
 	sheetHint: {
 		color: "#8CA39D",
 		fontSize: 12,
@@ -1939,6 +2092,46 @@ const styles = StyleSheet.create({
 	},
 	sheetClose: { alignItems: "center", justifyContent: "center", minHeight: 44 },
 	sheetCloseText: { color: "#BFD9D3", fontSize: 14, fontWeight: "700" },
+	factors: {
+		backgroundColor: "#0D1412",
+		borderRadius: 10,
+		gap: 3,
+		padding: 10,
+	},
+	factorsTitle: { color: "#E3EEEA", fontSize: 13, fontWeight: "700" },
+	factorsText: { color: "#A9BDB6", fontSize: 12, lineHeight: 17 },
+	field: { gap: 4 },
+	fieldLabel: { color: "#8CA39D", fontSize: 12, fontWeight: "700" },
+	fieldValue: { color: "#E3EEEA", fontSize: 14, lineHeight: 20 },
+	unverifiedText: {
+		color: TONE_COLOR.estimated,
+		fontSize: 12,
+		fontWeight: "600",
+	},
+	fieldInput: {
+		backgroundColor: "#151D1B",
+		borderColor: "#2A3A36",
+		borderRadius: 12,
+		borderWidth: 1,
+		color: "#EDF5EA",
+		fontSize: 15,
+		minHeight: 44,
+		paddingHorizontal: 12,
+	},
+	fieldInputFlag: { borderColor: "#7A6230" },
+	options: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+	option: {
+		alignItems: "center",
+		borderColor: "#2A3A36",
+		borderRadius: 12,
+		borderWidth: 1,
+		justifyContent: "center",
+		minHeight: 44,
+		paddingHorizontal: 12,
+	},
+	optionOn: { backgroundColor: "#173A34", borderColor: ACCENT },
+	optionText: { color: "#BFD9D3", fontSize: 13, fontWeight: "600" },
+	optionTextOn: { color: ACCENT },
 	pressedSoft: { opacity: 0.6 },
 	pressedStrong: { opacity: 0.82 },
 	pressedRow: { opacity: 0.7 },
