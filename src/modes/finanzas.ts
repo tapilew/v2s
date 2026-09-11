@@ -215,6 +215,43 @@ const tipoSaid = (clause: readonly string[]) =>
 		phrases.some((phrase) => hasPhrase(clause, phrase)),
 	)?.[0] ?? null;
 
+// Only an expense keeps this category: categoriaFor files an Ingreso or Ahorro row under its tipo.
+const CATEGORIA_PHRASES: ReadonlyArray<
+	readonly [Categoria, readonly string[]]
+> = [
+	[
+		"Alimentación",
+		[
+			"almuerzo",
+			"desayuno",
+			"cena",
+			"comida",
+			"super",
+			"supermercado",
+			"restaurante",
+			"cafe",
+			"pizza",
+		],
+	],
+	[
+		"Servicios",
+		["luz", "agua", "internet", "telefono", "celular", "cable", "gas"],
+	],
+	[
+		"Transporte",
+		["taxi", "uber", "gasolina", "bus", "metro", "pasaje", "peaje"],
+	],
+	["Vivienda", ["alquiler", "renta", "hipoteca"]],
+	["Salud", ["farmacia", "medicina", "medicinas", "consulta medica", "medico"]],
+	["Educación", ["utiles", "colegio", "matricula", "universidad", "curso"]],
+	["Entretenimiento", ["netflix", "spotify", "cine", "concierto"]],
+];
+
+const categoriaSaid = (tokens: readonly string[]) =>
+	CATEGORIA_PHRASES.find(([, phrases]) =>
+		phrases.some((phrase) => hasPhrase(tokens, phrase)),
+	)?.[0] ?? null;
+
 const METODO_WORDS = new Map<string, Metodo>([
 	["yappy", "Yappy"],
 	["efectivo", "Efectivo"],
@@ -354,7 +391,12 @@ const assemble = (
 				fecha !== undefined && saidDates.includes(fecha) ? fecha : isoDate(now),
 			concepto: said.concepto,
 			tipo,
-			categoria: categoriaFor(tipo, said.categoria),
+			categoria: categoriaFor(
+				tipo,
+				categoriaSaid(tokensOf(said.concepto)) ??
+					(clause && categoriaSaid(clause)) ??
+					said.categoria,
+			),
 			monto: said.monto,
 			metodo: metodoFor(said.metodo, clause, saidMetodos),
 		};

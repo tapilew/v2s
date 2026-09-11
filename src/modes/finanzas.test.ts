@@ -122,7 +122,7 @@ describe("assemble on Qwen3 probe outputs", () => {
 			movement({
 				concepto: "Almuerzo",
 				tipo: "Gasto",
-				categoria: "Compras",
+				categoria: "Alimentación",
 				monto: 12,
 				metodo: "Efectivo",
 			}),
@@ -214,7 +214,7 @@ describe("assemble on MedPsy probe outputs", () => {
 			movement({
 				concepto: "Luz",
 				tipo: "Gasto",
-				categoria: "Educación",
+				categoria: "Servicios",
 				monto: 45,
 				metodo: "Yappy",
 			}),
@@ -276,7 +276,7 @@ describe("assemble on MedPsy probe outputs", () => {
 			movement({
 				concepto: "Alquiler",
 				tipo: "Gasto",
-				categoria: "Compras",
+				categoria: "Vivienda",
 				monto: 550,
 				metodo: "Transferencia",
 			}),
@@ -416,7 +416,7 @@ describe("assemble on corrupted gold rows", () => {
 		]);
 	});
 
-	test("an expense filed under Ingreso or Ahorro becomes Otro", () => {
+	test("an expense filed under Ingreso or Ahorro takes its keyword category, else Otro", () => {
 		const { text, gold } = goldCase("f9");
 		expect(
 			cellsOf(text, [
@@ -424,9 +424,76 @@ describe("assemble on corrupted gold rows", () => {
 				{ ...gold[1], categoria: "Ahorro" },
 			]).map(({ tipo, categoria }) => [tipo, categoria]),
 		).toEqual([
-			["Gasto", "Otro"],
-			["Gasto", "Otro"],
+			["Gasto", "Servicios"],
+			["Gasto", "Entretenimiento"],
 		]);
+		expect(
+			cellsOf("Pagué 40 de un regalo.", [
+				{
+					concepto: "Regalo",
+					tipo: "Gasto",
+					categoria: "Ingreso",
+					monto: 40,
+					metodo: null,
+				},
+			]).map(({ tipo, categoria }) => [tipo, categoria]),
+		).toEqual([["Gasto", "Otro"]]);
+	});
+});
+
+describe("categoria", () => {
+	test("the demo capture files 12 de almuerzo under Alimentación, not Compras", () => {
+		expect(
+			assemble(finanzas.demo.example, finanzas.demo.modelText).map(
+				({ cells }) => [cells.concepto, cells.categoria],
+			),
+		).toEqual([
+			["Luz", "Servicios"],
+			["Almuerzo", "Alimentación"],
+		]);
+	});
+
+	test("gasolina con tarjeta is Transporte from the concepto or its clause", () => {
+		const gasolina = {
+			tipo: "Gasto",
+			categoria: "Compras",
+			monto: 60,
+			metodo: "Tarjeta",
+		};
+		for (const concepto of ["Gasolina", "Tanque lleno"])
+			expect(
+				cellsOf(GASOLINA, [{ ...gasolina, concepto }]).map(
+					(cells) => cells.categoria,
+				),
+			).toEqual(["Transporte"]);
+	});
+
+	test("a salary stays Ingreso even when it names a food word", () => {
+		expect(
+			cellsOf("Me pagaron el sueldo del restaurante, 900 dólares.", [
+				{
+					concepto: "Sueldo del restaurante",
+					tipo: "Gasto",
+					categoria: "Alimentación",
+					monto: 900,
+					metodo: null,
+				},
+			]).map(({ tipo, categoria }) => [tipo, categoria]),
+		).toEqual([["Ingreso", "Ingreso"]]);
+	});
+
+	test("a concepto with no keyword keeps the model's category", () => {
+		expect(
+			cellsOf("Compré un regalo por 40 con tarjeta.", [
+				{
+					concepto: "Regalo",
+					tipo: "Gasto",
+					categoria: "Compras",
+					monto: 40,
+					metodo: "Tarjeta",
+				},
+			]).map((cells) => cells.categoria),
+		).toEqual(["Compras"]);
 	});
 });
 
@@ -434,16 +501,16 @@ describe("model output parsing", () => {
 	test("skips bad items and falls back on bad enum values", () => {
 		expect(
 			assemble(
-				"Gasté 20 en taxi y 30 en el cine.",
+				"Gasté 20 en un viaje y 30 en el cine.",
 				JSON.stringify({
 					movimientos: [
-						"taxi",
+						"viaje",
 						null,
 						{ concepto: "Nada", monto: "mucho" },
 						{ concepto: "", monto: 5 },
 						{ concepto: "Gratis", monto: 0 },
 						{
-							concepto: "Taxi",
+							concepto: "Viaje",
 							tipo: "gasto",
 							categoria: "Movilidad",
 							monto: 20,
@@ -461,7 +528,7 @@ describe("model output parsing", () => {
 			),
 		).toEqual([
 			movement({
-				concepto: "Taxi",
+				concepto: "Viaje",
 				tipo: "Gasto",
 				categoria: "Otro",
 				monto: 20,
