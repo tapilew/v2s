@@ -147,6 +147,7 @@ Pruebas: `bun test src` y `bunx tsc --noEmit`.
 
 - Solo probamos español.
 - Los casos de evaluación son sintéticos. No usamos datos reales de clientes bancarios, pacientes ni hospitales.
+- En las corridas, Qwen3 a veces inventó métodos de pago o tomó un ingreso como gasto, y MedPsy a veces confundió modalidades, unió dos equipos en una fila o inventó un estado. La verificación marca los números sin respaldo, pero no detecta una categoría o una modalidad equivocada.
 - El modelo puede omitir datos o elegir columnas distintas a las que esperabas. Cada fila guarda el texto original y las celdas se editan.
 - Las cifras de escritorio no son las del teléfono. Las del teléfono salen del registro de rendimiento.
 
