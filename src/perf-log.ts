@@ -26,6 +26,7 @@ export type PerfEntry =
 	  }
 	| {
 			event: "extract";
+			step: "list" | "rows";
 			model: string;
 			quantization: string;
 			prompt: string;

@@ -1,47 +1,10 @@
 import { File, Paths } from "expo-file-system";
-import { isRecord, type LooseRecord } from "./sheet";
+import { type Library, parseLibrary } from "./spreadsheet";
 
-export type RecordsRead =
-	| { kind: "ok"; records: LooseRecord[] }
+export type LibraryRead =
+	| { kind: "ok"; library: Library }
 	| { kind: "absent" }
 	| { kind: "quarantined" };
-
-const recordFrom = (value: unknown): LooseRecord | null => {
-	if (!isRecord(value)) return null;
-	const { id, at, source, extraction, unverified } = value;
-	if (
-		typeof id !== "string" ||
-		typeof source !== "string" ||
-		typeof at !== "number" ||
-		!Number.isFinite(at)
-	)
-		return null;
-	return {
-		id,
-		at,
-		source,
-		extraction: extraction ?? null,
-		unverified: Array.isArray(unverified)
-			? unverified.filter((path): path is string => typeof path === "string")
-			: [],
-	};
-};
-
-export const parseRecords = (
-	text: string,
-): { records: LooseRecord[]; dropped: number } | null => {
-	let raw: unknown;
-	try {
-		raw = JSON.parse(text);
-	} catch {
-		return null;
-	}
-	if (!Array.isArray(raw)) return null;
-	const records = raw
-		.map(recordFrom)
-		.filter((found): found is LooseRecord => found !== null);
-	return { records, dropped: raw.length - records.length };
-};
 
 const documentFile = (name: string) => new File(Paths.document, name);
 
@@ -53,7 +16,7 @@ const replaceFile = (name: string, text: string) => {
 	next.moveSync(documentFile(name), { overwrite: true });
 };
 
-export const openRecordStore = (base: string) => {
+export const openLibraryStore = (base: string) => {
 	const name = `${base}.json`;
 	const aside = (label: string) =>
 		documentFile(`${base}.${label}-${Date.now()}.json`);
@@ -64,7 +27,7 @@ export const openRecordStore = (base: string) => {
 		} catch {}
 	};
 
-	// The next save rewrites the file without the dropped records, so the original text stays beside it.
+	// The next save rewrites the file without the dropped entries, so the original text stays beside it.
 	const keepOriginal = (text: string) => {
 		try {
 			const copy = aside("salvaged");
@@ -74,7 +37,7 @@ export const openRecordStore = (base: string) => {
 	};
 
 	return {
-		load: (): RecordsRead => {
+		load: (): LibraryRead => {
 			try {
 				const stale = documentFile(`${name}.tmp`);
 				if (stale.exists) stale.delete();
@@ -88,16 +51,15 @@ export const openRecordStore = (base: string) => {
 				quarantine();
 				return { kind: "quarantined" };
 			}
-			const parsed = parseRecords(text);
+			const parsed = parseLibrary(text);
 			if (!parsed) {
 				quarantine();
 				return { kind: "quarantined" };
 			}
 			if (parsed.dropped > 0) keepOriginal(text);
-			return { kind: "ok", records: parsed.records };
+			return { kind: "ok", library: parsed.library };
 		},
-		save: (records: readonly LooseRecord[]) =>
-			replaceFile(name, JSON.stringify(records)),
+		save: (library: Library) => replaceFile(name, JSON.stringify(library)),
 	};
 };
 

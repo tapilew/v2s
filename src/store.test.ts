@@ -1,61 +1,78 @@
 /// <reference types="bun-types" />
 import { describe, expect, mock, test } from "bun:test";
 
-mock.module("expo-file-system", () => ({ File: class {}, Paths: {} }));
+type Written = Map<string, string>;
 
-describe("parseRecords", () => {
-	test("keeps good records, keeps the words of a pending one, drops the rest", async () => {
-		const { parseRecords } = await import("./store");
-		const movimientos = [{ concepto: "Luz", monto: 45 }];
-		const text = JSON.stringify([
-			{
-				id: "a",
-				at: 1,
-				source: "Pagué 45 de luz",
-				extraction: movimientos,
-				unverified: ["0.monto", 4],
-			},
-			{ id: "b", at: 2, source: "pendiente" },
-			{ id: "c", at: 3, source: "sin lista", unverified: "0.monto" },
-			{ id: "d", at: "ayer", source: "fecha mala" },
-			{ id: "e", at: Number.NaN, source: "fecha mala" },
-			{ at: 4, source: "sin id" },
-			{ id: "f", at: 5 },
-			null,
-			7,
-		]);
-		expect(parseRecords(text)).toEqual({
-			records: [
-				{
-					id: "a",
-					at: 1,
-					source: "Pagué 45 de luz",
-					extraction: movimientos,
-					unverified: ["0.monto"],
-				},
-				{
-					id: "b",
-					at: 2,
-					source: "pendiente",
-					extraction: null,
-					unverified: [],
-				},
-				{
-					id: "c",
-					at: 3,
-					source: "sin lista",
-					extraction: null,
-					unverified: [],
-				},
-			],
-			dropped: 6,
+const files: Written = new Map();
+const moves: string[] = [];
+
+class FakeFile {
+	name: string;
+	constructor(_dir: unknown, name: string) {
+		this.name = name;
+	}
+	get exists() {
+		return files.has(this.name);
+	}
+	create() {
+		files.set(this.name, "");
+	}
+	delete() {
+		files.delete(this.name);
+	}
+	write(text: string) {
+		files.set(this.name, text);
+	}
+	textSync() {
+		return files.get(this.name) ?? "";
+	}
+	moveSync(target: FakeFile) {
+		files.set(target.name, files.get(this.name) ?? "");
+		files.delete(this.name);
+		moves.push(`${this.name} -> ${target.name}`);
+	}
+}
+
+mock.module("expo-file-system", () => ({ File: FakeFile, Paths: {} }));
+
+describe("openLibraryStore", () => {
+	test("writes through a temp file and reads back", async () => {
+		const { openLibraryStore } = await import("./store");
+		const store = openLibraryStore("library-test");
+		expect(store.load()).toEqual({ kind: "absent" });
+		store.save({ sheets: [], pending: [] });
+		expect(moves.at(-1)).toBe("library-test.json.tmp -> library-test.json");
+		expect(store.load()).toEqual({
+			kind: "ok",
+			library: { sheets: [], pending: [] },
 		});
 	});
 
-	test("rejects text that is not a list of records", async () => {
-		const { parseRecords } = await import("./store");
-		expect(parseRecords("{")).toBeNull();
-		expect(parseRecords('{"records": []}')).toBeNull();
-		expect(parseRecords("[]")).toEqual({ records: [], dropped: 0 });
+	test("quarantines a file it cannot parse and removes a stale temp file", async () => {
+		const { openLibraryStore } = await import("./store");
+		files.set("library-bad.json", "{ not json");
+		files.set("library-bad.json.tmp", "half written");
+		const store = openLibraryStore("library-bad");
+		expect(store.load()).toEqual({ kind: "quarantined" });
+		expect(files.has("library-bad.json")).toBe(false);
+		expect(files.has("library-bad.json.tmp")).toBe(false);
+		expect(
+			[...files.keys()].some((name) => name.startsWith("library-bad.corrupt-")),
+		).toBe(true);
+	});
+
+	test("keeps a salvaged copy when it drops entries", async () => {
+		const { openLibraryStore } = await import("./store");
+		files.set(
+			"library-mixed.json",
+			JSON.stringify({ sheets: [null], pending: [] }),
+		);
+		const read = openLibraryStore("library-mixed").load();
+		expect(read.kind).toBe("ok");
+		expect(
+			[...files.keys()].some((name) =>
+				name.startsWith("library-mixed.salvaged-"),
+			),
+		).toBe(true);
 	});
 });

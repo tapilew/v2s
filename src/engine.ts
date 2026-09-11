@@ -1,7 +1,14 @@
+import {
+	assemble,
+	type CompletionRequest,
+	type Generated,
+	HARNESS,
+	type Job,
+	parseList,
+} from "./harness";
 import { ASR_MODEL, type ModelSpec } from "./models";
-import { MODES } from "./modes";
 import { DEVICE, logPerf } from "./perf-log";
-import type { Draft, ModeId } from "./sheet";
+import type { ModeId } from "./spreadsheet";
 
 export type ModelProgress = (model: ModelSpec, percent: number) => void;
 
@@ -9,7 +16,7 @@ export type Engine = {
 	prepare(mode: ModeId, onProgress: ModelProgress): Promise<void>;
 	loaded(): readonly string[];
 	transcribe(audioPath: string | null, mode: ModeId): Promise<string>;
-	extract(mode: ModeId, text: string): Promise<Draft<unknown> | null>;
+	generate(mode: ModeId, job: Job): Promise<Generated | null>;
 	release(): Promise<void>;
 };
 
@@ -44,7 +51,7 @@ export const createQvacEngine = (): Engine => {
 	return {
 		prepare: (mode, onProgress) =>
 			serial(async () => {
-				const wanted = [ASR_MODEL, MODES[mode].extractor];
+				const wanted = [ASR_MODEL, HARNESS[mode].extractor];
 				await unloadExcept(wanted);
 				const qvac = await sdk();
 				for (const spec of wanted) {
@@ -94,36 +101,59 @@ export const createQvacEngine = (): Engine => {
 			return text;
 		},
 
-		async extract(mode, text) {
+		async generate(mode, job) {
 			const qvac = await sdk();
-			const spec = MODES[mode];
-			const now = new Date();
-			const startedAt = Date.now();
-			const run = qvac.completion({
-				modelId: idFor(spec.extractor),
-				stream: true,
-				...spec.request(text, now),
+			const { extractor } = HARNESS[mode];
+			const complete = async (
+				request: CompletionRequest,
+				step: "list" | "rows",
+				parsed: (contentText: string) => boolean,
+			) => {
+				const startedAt = Date.now();
+				const run = qvac.completion({
+					modelId: idFor(extractor),
+					stream: true,
+					...request,
+				});
+				for await (const _ of run.events);
+				const final = await run.final;
+				const { stats } = final;
+				logPerf({
+					event: "extract",
+					step,
+					model: extractor.sdkConstant,
+					quantization: extractor.quantization,
+					prompt: job.text,
+					transcriptChars: job.text.length,
+					promptTokens: stats?.promptTokens ?? null,
+					generatedTokens: stats?.generatedTokens ?? null,
+					ttftMs: stats?.timeToFirstToken ?? null,
+					tokensPerSecond: stats?.tokensPerSecond ?? null,
+					backendDevice: stats?.backendDevice ?? null,
+					ms: Date.now() - startedAt,
+					parsed: parsed(final.contentText),
+					device: DEVICE,
+				});
+				return final.contentText;
+			};
+			const listText = await complete(
+				job.list,
+				"list",
+				(contentText) => parseList(contentText) !== null,
+			);
+			// A list the model could not produce still gets one row: the whole text is the only element.
+			const items = parseList(listText) ?? [job.text];
+			let generated: Generated | null = null;
+			await complete(job.rows(items), "rows", (contentText) => {
+				generated = assemble(
+					job.text,
+					contentText,
+					new Date(),
+					job.columns ?? undefined,
+				);
+				return generated !== null;
 			});
-			for await (const _ of run.events);
-			const final = await run.final;
-			const draft = spec.assemble(text, final.contentText, now);
-			const { stats } = final;
-			logPerf({
-				event: "extract",
-				model: spec.extractor.sdkConstant,
-				quantization: spec.extractor.quantization,
-				prompt: text,
-				transcriptChars: text.length,
-				promptTokens: stats?.promptTokens ?? null,
-				generatedTokens: stats?.generatedTokens ?? null,
-				ttftMs: stats?.timeToFirstToken ?? null,
-				tokensPerSecond: stats?.tokensPerSecond ?? null,
-				backendDevice: stats?.backendDevice ?? null,
-				ms: Date.now() - startedAt,
-				parsed: draft !== null,
-				device: DEVICE,
-			});
-			return draft;
+			return generated;
 		},
 	};
 };
