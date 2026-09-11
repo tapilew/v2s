@@ -1,8 +1,9 @@
 import {
-	type Extraction,
-	extractionRequest,
-	parseExtraction,
-} from "./installed-base";
+	type NoteDraft,
+	noteRequest,
+	parseNote,
+	unverifiedPaths,
+} from "./clinical-note";
 import { MODEL_ROLES, MODELS, type ModelRole } from "./models";
 import { DEVICE, logPerf } from "./perf-log";
 
@@ -10,11 +11,8 @@ export type Engine = {
 	load(onProgress: (role: ModelRole, percent: number) => void): Promise<void>;
 	loaded(): readonly ModelRole[];
 	unload(): Promise<void>;
-	transcribe(
-		audioPath: string | null,
-		question: string | null,
-	): Promise<string>;
-	extract(said: string): Promise<Extraction | null>;
+	transcribe(audioPath: string | null): Promise<string>;
+	draftNote(transcript: string): Promise<NoteDraft | null>;
 };
 
 const sdk = () => import("@qvac/sdk");
@@ -95,31 +93,34 @@ export const createQvacEngine = (): Engine => {
 			return text;
 		},
 
-		async extract(said) {
+		async draftNote(transcript) {
 			const qvac = await sdk();
-			const request = extractionRequest(said, new Date());
+			const request = noteRequest(transcript, new Date());
 			const startedAt = Date.now();
 			const final = await qvac.completion({
 				modelId: modelId("extractor"),
 				stream: true,
 				...request,
 			}).final;
-			const extraction = parseExtraction(final.contentText);
+			const note = parseNote(final.contentText);
 			const { stats } = final;
 			logPerf({
 				event: "extract",
 				model: MODELS.extractor.sdkConstant,
 				quantization: MODELS.extractor.quantization,
-				prompt: said,
+				prompt: transcript,
+				transcriptChars: transcript.length,
 				promptTokens: stats?.promptTokens ?? null,
 				generatedTokens: stats?.generatedTokens ?? null,
 				ttftMs: stats?.timeToFirstToken ?? null,
 				tokensPerSecond: stats?.tokensPerSecond ?? null,
 				backendDevice: stats?.backendDevice ?? null,
 				ms: Date.now() - startedAt,
-				parsed: extraction !== null,
+				parsed: note !== null,
 			});
-			return extraction;
+			return note === null
+				? null
+				: { note, unverified: unverifiedPaths(transcript, note) };
 		},
 	};
 };

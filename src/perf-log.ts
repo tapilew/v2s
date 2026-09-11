@@ -23,6 +23,7 @@ export type PerfEntry =
 			model: string;
 			quantization: string;
 			prompt: string;
+			transcriptChars: number;
 			promptTokens: number | null;
 			generatedTokens: number | null;
 			ttftMs: number | null;
