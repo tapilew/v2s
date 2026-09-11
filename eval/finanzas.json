@@ -1,0 +1,78 @@
+[
+	{
+		"id": "f1",
+		"text": "Hoy pagué 45 dólares de luz con Yappy y 12 de almuerzo en efectivo.",
+		"gold": [
+			{ "concepto": "luz", "tipo": "Gasto", "categoria": "Servicios", "monto": 45, "metodo": "Yappy" },
+			{ "concepto": "almuerzo", "tipo": "Gasto", "categoria": "Alimentación", "monto": 12, "metodo": "Efectivo" }
+		]
+	},
+	{
+		"id": "f2",
+		"text": "Me cayó la quincena, 850 dólares, y pasé 100 a la cuenta de ahorros.",
+		"gold": [
+			{ "concepto": "quincena", "tipo": "Ingreso", "categoria": "Ingreso", "monto": 850, "metodo": null },
+			{ "concepto": "cuenta de ahorros", "tipo": "Ahorro", "categoria": "Ahorro", "monto": 100, "metodo": null }
+		]
+	},
+	{
+		"id": "f3",
+		"text": "Gasté 60 en gasolina con tarjeta.",
+		"gold": [
+			{ "concepto": "gasolina", "tipo": "Gasto", "categoria": "Transporte", "monto": 60, "metodo": "Tarjeta" }
+		]
+	},
+	{
+		"id": "f4",
+		"text": "Ayer compré útiles escolares por 38.50 y el taxi fue 6.",
+		"gold": [
+			{ "concepto": "útiles escolares", "tipo": "Gasto", "categoria": "Educación", "monto": 38.5, "metodo": null },
+			{ "concepto": "taxi", "tipo": "Gasto", "categoria": "Transporte", "monto": 6, "metodo": null }
+		]
+	},
+	{
+		"id": "f5",
+		"text": "Pagué el alquiler, 550, por transferencia.",
+		"gold": [
+			{ "concepto": "alquiler", "tipo": "Gasto", "categoria": "Vivienda", "monto": 550, "metodo": "Transferencia" }
+		]
+	},
+	{
+		"id": "f6",
+		"text": "Deposité 75 en el plan de ahorro navideño.",
+		"gold": [
+			{ "concepto": "ahorro navideño", "tipo": "Ahorro", "categoria": "Ahorro", "monto": 75, "metodo": null }
+		]
+	},
+	{
+		"id": "f7",
+		"text": "Fui al médico, la consulta costó 30 y las medicinas 22 con tarjeta.",
+		"gold": [
+			{ "concepto": "consulta médica", "tipo": "Gasto", "categoria": "Salud", "monto": 30, "metodo": null },
+			{ "concepto": "medicinas", "tipo": "Gasto", "categoria": "Salud", "monto": 22, "metodo": "Tarjeta" }
+		]
+	},
+	{
+		"id": "f8",
+		"text": "Vendí unas empanadas en la oficina y me dieron 40 por Yappy.",
+		"gold": [
+			{ "concepto": "venta de empanadas", "tipo": "Ingreso", "categoria": "Ingreso", "monto": 40, "metodo": "Yappy" }
+		]
+	},
+	{
+		"id": "f9",
+		"text": "Pagué el internet, 35 dólares, y Netflix, 15.99.",
+		"gold": [
+			{ "concepto": "internet", "tipo": "Gasto", "categoria": "Servicios", "monto": 35, "metodo": null },
+			{ "concepto": "Netflix", "tipo": "Gasto", "categoria": "Entretenimiento", "monto": 15.99, "metodo": null }
+		]
+	},
+	{
+		"id": "f10",
+		"text": "Compré zapatos para el niño en 28 en efectivo y retiré 50 del cajero.",
+		"gold": [
+			{ "concepto": "zapatos", "tipo": "Gasto", "categoria": "Compras", "monto": 28, "metodo": "Efectivo" }
+		],
+		"note": "Retirar efectivo del cajero no es un gasto ni un ingreso. No debe crear una fila."
+	}
+]

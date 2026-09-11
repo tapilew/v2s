@@ -1,0 +1,497 @@
+[
+	{
+		"id": "c1",
+		"transcript": "Buenos días. Paciente María González, de cuarenta y dos años. ¿Qué la trae hoy? Tengo fiebre y tos desde hace tres días, y me duele el pecho del lado derecho cuando respiro. ¿Es alérgica a algún medicamento? Sí, a la penicilina. Presión ciento veinte sobre ochenta, temperatura treinta y ocho coma cinco, saturación noventa y seis por ciento. Escucho crepitantes en la base del pulmón derecho. Impresión diagnóstica, neumonía adquirida en la comunidad. Indico azitromicina quinientos miligramos por vía oral una vez al día por tres días, y una radiografía de tórax. Si tiene dificultad para respirar, acuda a urgencias.",
+		"gold": {
+			"paciente": {
+				"nombre": "María González",
+				"cedula": null,
+				"edad": "42 años",
+				"sexo": "Femenino"
+			},
+			"motivo_consulta": "Fiebre y tos de tres días de evolución con dolor torácico derecho al respirar",
+			"enfermedad_actual": "Fiebre y tos desde hace tres días, con dolor en el pecho del lado derecho al respirar",
+			"antecedentes": null,
+			"alergias": "Penicilina",
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": "120/80",
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": 38.5,
+				"saturacion_oxigeno": 96,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Crepitantes en la base del pulmón derecho",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Neumonía adquirida en la comunidad",
+					"cie10_sugerido": "J18.9",
+					"evidencia": "crepitantes en la base del pulmón derecho"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Azitromicina",
+					"dosis": "500 mg",
+					"via": "Oral",
+					"frecuencia": "Una vez al día",
+					"duracion": "3 días",
+					"evidencia": "azitromicina quinientos miligramos por vía oral una vez al día por tres días"
+				}
+			],
+			"examenes_solicitados": "Radiografía de tórax",
+			"referencia": null,
+			"indicaciones": "Acudir a urgencias si presenta dificultad para respirar"
+		}
+	},
+	{
+		"id": "c2",
+		"transcript": "Control de hipertensión arterial. Paciente Roberto Jiménez, de cincuenta y ocho años. Viene a control, se toma losartán cincuenta miligramos una vez al día. ¿Cómo se ha sentido? Bien, sin dolores de cabeza ni mareos. Presión ciento treinta y dos sobre ochenta y cuatro, frecuencia cardíaca setenta y dos. Peso ochenta y tres kilos. Continúa con buen control. Diagnóstico, hipertensión arterial esencial, controlada. Mantengo losartán cincuenta miligramos una vez al día y le pido perfil lipídico y creatinina para la próxima cita en tres meses.",
+		"gold": {
+			"paciente": {
+				"nombre": "Roberto Jiménez",
+				"cedula": null,
+				"edad": "58 años",
+				"sexo": "Masculino"
+			},
+			"motivo_consulta": "Control de hipertensión arterial",
+			"enfermedad_actual": "Paciente en control, sin cefalea ni mareos, en tratamiento con losartán",
+			"antecedentes": "Hipertensión arterial",
+			"alergias": null,
+			"medicamentos_actuales": "Losartán 50 mg una vez al día",
+			"signos_vitales": {
+				"presion_arterial": "132/84",
+				"frecuencia_cardiaca": 72,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": 83,
+				"talla_cm": null
+			},
+			"examen_fisico": null,
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Hipertensión arterial esencial controlada",
+					"cie10_sugerido": "I10",
+					"evidencia": "hipertensión arterial esencial, controlada"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Losartán",
+					"dosis": "50 mg",
+					"via": "Oral",
+					"frecuencia": "Una vez al día",
+					"duracion": null,
+					"evidencia": "mantengo losartán cincuenta miligramos una vez al día"
+				}
+			],
+			"examenes_solicitados": "Perfil lipídico y creatinina",
+			"referencia": null,
+			"indicaciones": "Próxima cita en tres meses"
+		}
+	},
+	{
+		"id": "c3",
+		"transcript": "Buenas tardes. Paciente Carmen Ábrego, de sesenta y cinco años, viene por control de diabetes tipo dos. ¿Cómo ha estado con el azúcar? Los niveles en casa han estado entre ciento treinta y ciento sesenta. Toma metformina ochocientos cincuenta miligramos dos veces al día. Peso setenta y dos kilos, talla ciento cincuenta y ocho centímetros. Presión ciento veinticinco sobre setenta y ocho. Le pido hemoglobina glicosilada y perfil renal. Diagnóstico, diabetes mellitus tipo dos, control regular. Continúo metformina ochocientos cincuenta miligramos dos veces al día y refuerzo dieta y ejercicio. Cita en dos meses con resultados.",
+		"gold": {
+			"paciente": {
+				"nombre": "Carmen Ábrego",
+				"cedula": null,
+				"edad": "65 años",
+				"sexo": "Femenino"
+			},
+			"motivo_consulta": "Control de diabetes mellitus tipo 2",
+			"enfermedad_actual": "Niveles de glucosa en casa entre 130 y 160",
+			"antecedentes": "Diabetes mellitus tipo 2",
+			"alergias": null,
+			"medicamentos_actuales": "Metformina 850 mg dos veces al día",
+			"signos_vitales": {
+				"presion_arterial": "125/78",
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": 72,
+				"talla_cm": 158
+			},
+			"examen_fisico": null,
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Diabetes mellitus tipo 2, control regular",
+					"cie10_sugerido": "E11.9",
+					"evidencia": "diabetes mellitus tipo dos, control regular"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Metformina",
+					"dosis": "850 mg",
+					"via": "Oral",
+					"frecuencia": "Dos veces al día",
+					"duracion": null,
+					"evidencia": "continúo metformina ochocientos cincuenta miligramos dos veces al día"
+				}
+			],
+			"examenes_solicitados": "Hemoglobina glicosilada y perfil renal",
+			"referencia": null,
+			"indicaciones": "Reforzar dieta y ejercicio, cita en dos meses con resultados"
+		}
+	},
+	{
+		"id": "c4",
+		"transcript": "Buenos días, ¿qué le pasa al niño? Es mi hijo Diego, tiene cuatro años. Desde ayer tiene vómitos y diarrea, como seis episodios. ¿Tiene fiebre? Sí, treinta y siete coma ocho. ¿Le está tolerando líquidos? Un poco, pero se ve decaído. Peso dieciocho kilos. Frecuencia cardíaca ciento diez, saturación noventa y ocho por ciento. Al examen, mucosas algo secas, abdomen blando sin dolor. Diagnóstico, gastroenteritis aguda con deshidratación leve. Indico suero de rehidratación oral y ondansetrón cuatro miligramos si persisten los vómitos. Si no tolera líquidos o empeora, debe regresar a urgencias.",
+		"gold": {
+			"paciente": {
+				"nombre": "Diego",
+				"cedula": null,
+				"edad": "4 años",
+				"sexo": "Masculino"
+			},
+			"motivo_consulta": "Vómitos y diarrea desde ayer",
+			"enfermedad_actual": "Aproximadamente seis episodios de vómito y diarrea desde ayer, con fiebre, tolerando líquidos parcialmente, decaído",
+			"antecedentes": null,
+			"alergias": null,
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": 110,
+				"frecuencia_respiratoria": null,
+				"temperatura": 37.8,
+				"saturacion_oxigeno": 98,
+				"peso_kg": 18,
+				"talla_cm": null
+			},
+			"examen_fisico": "Mucosas algo secas, abdomen blando sin dolor",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Gastroenteritis aguda con deshidratación leve",
+					"cie10_sugerido": "A09",
+					"evidencia": "gastroenteritis aguda con deshidratación leve"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Suero de rehidratación oral",
+					"dosis": null,
+					"via": "Oral",
+					"frecuencia": null,
+					"duracion": null,
+					"evidencia": "indico suero de rehidratación oral"
+				},
+				{
+					"medicamento": "Ondansetrón",
+					"dosis": "4 mg",
+					"via": null,
+					"frecuencia": "Si persisten los vómitos",
+					"duracion": null,
+					"evidencia": "ondansetrón cuatro miligramos si persisten los vómitos"
+				}
+			],
+			"examenes_solicitados": null,
+			"referencia": null,
+			"indicaciones": "Regresar a urgencias si no tolera líquidos o empeora"
+		}
+	},
+	{
+		"id": "c5",
+		"transcript": "Paciente Lucía Herrera, de veintiocho años. Refiere ardor al orinar y ganas frecuentes de ir al baño desde hace dos días, sin fiebre. Presión ciento diez sobre setenta. Al examen, dolor leve en hipogastrio, puño percusión negativa. Diagnóstico, infección urinaria baja no complicada. Indico nitrofurantoína cien miligramos cada doce horas por cinco días, y le pido un urocultivo antes de iniciar. Debe tomar abundantes líquidos.",
+		"gold": {
+			"paciente": {
+				"nombre": "Lucía Herrera",
+				"cedula": null,
+				"edad": "28 años",
+				"sexo": "Femenino"
+			},
+			"motivo_consulta": "Ardor al orinar y ganas frecuentes de orinar de dos días de evolución",
+			"enfermedad_actual": "Ardor al orinar y polaquiuria desde hace dos días, sin fiebre",
+			"antecedentes": null,
+			"alergias": null,
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": "110/70",
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Dolor leve en hipogastrio, puño percusión negativa",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Infección urinaria baja no complicada",
+					"cie10_sugerido": "N39.0",
+					"evidencia": "infección urinaria baja no complicada"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Nitrofurantoína",
+					"dosis": "100 mg",
+					"via": "Oral",
+					"frecuencia": "Cada 12 horas",
+					"duracion": "5 días",
+					"evidencia": "nitrofurantoína cien miligramos cada doce horas por cinco días"
+				}
+			],
+			"examenes_solicitados": "Urocultivo",
+			"referencia": null,
+			"indicaciones": "Tomar abundantes líquidos"
+		}
+	},
+	{
+		"id": "c6",
+		"transcript": "Paciente Javier Morales, de treinta y cinco años. Me ha dado mucha dificultad para respirar desde anoche y sibilancias. Soy asmático desde niño y uso salbutamol cuando lo necesito. ¿Alguna alergia? Al polvo. Frecuencia respiratoria veintiocho, saturación noventa y dos por ciento, frecuencia cardíaca ciento cinco. Al examen, sibilancias espiratorias difusas, uso de músculos accesorios. Diagnóstico, exacerbación aguda de asma. Le doy salbutamol en nebulización y prednisona cincuenta miligramos por vía oral una vez al día por cinco días. Si no mejora en veinticuatro horas, debe volver.",
+		"gold": {
+			"paciente": {
+				"nombre": "Javier Morales",
+				"cedula": null,
+				"edad": "35 años",
+				"sexo": "Masculino"
+			},
+			"motivo_consulta": "Dificultad para respirar y sibilancias desde anoche",
+			"enfermedad_actual": "Asmático desde la infancia, en tratamiento con salbutamol de rescate, con empeoramiento desde anoche",
+			"antecedentes": "Asma",
+			"alergias": "Polvo",
+			"medicamentos_actuales": "Salbutamol de rescate",
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": 105,
+				"frecuencia_respiratoria": 28,
+				"temperatura": null,
+				"saturacion_oxigeno": 92,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Sibilancias espiratorias difusas, uso de músculos accesorios",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Exacerbación aguda de asma",
+					"cie10_sugerido": "J45.9",
+					"evidencia": "exacerbación aguda de asma"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Salbutamol",
+					"dosis": null,
+					"via": "Nebulizado",
+					"frecuencia": null,
+					"duracion": null,
+					"evidencia": "le doy salbutamol en nebulización"
+				},
+				{
+					"medicamento": "Prednisona",
+					"dosis": "50 mg",
+					"via": "Oral",
+					"frecuencia": "Una vez al día",
+					"duracion": "5 días",
+					"evidencia": "prednisona cincuenta miligramos por vía oral una vez al día por cinco días"
+				}
+			],
+			"examenes_solicitados": null,
+			"referencia": null,
+			"indicaciones": "Volver si no mejora en 24 horas"
+		}
+	},
+	{
+		"id": "c7",
+		"transcript": "Paciente Antonio Ríos, de cuarenta y ocho años, trabaja cargando cajas en una bodega. Tiene dolor en la parte baja de la espalda desde hace una semana, después de levantar un objeto pesado. No tiene dolor que baje a la pierna ni hormigueo. Al examen, dolor a la palpación paravertebral lumbar, sin signos de alarma, movilidad conservada. Diagnóstico, lumbalgia mecánica. No amerita medicamentos por ahora, más allá de calor local. Lo refiero a fisioterapia y le doy indicaciones de reposo relativo y evitar cargar peso.",
+		"gold": {
+			"paciente": {
+				"nombre": "Antonio Ríos",
+				"cedula": null,
+				"edad": "48 años",
+				"sexo": "Masculino"
+			},
+			"motivo_consulta": "Dolor lumbar de una semana de evolución",
+			"enfermedad_actual": "Dolor lumbar tras levantar un objeto pesado, sin irradiación a la pierna ni hormigueo",
+			"antecedentes": null,
+			"alergias": null,
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Dolor a la palpación paravertebral lumbar, sin signos de alarma, movilidad conservada",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Lumbalgia mecánica",
+					"cie10_sugerido": "M54.5",
+					"evidencia": "lumbalgia mecánica"
+				}
+			],
+			"tratamiento": [],
+			"examenes_solicitados": null,
+			"referencia": "Fisioterapia",
+			"indicaciones": "Reposo relativo, evitar cargar peso, calor local"
+		}
+	},
+	{
+		"id": "c8",
+		"transcript": "Paciente Sofía Delgado, de treinta años, sin alergias conocidas. Consulta por dolor de garganta y fiebre desde hace dos días. Al examen, faringe eritematosa con placas blanquecinas, ganglios cervicales dolorosos. Temperatura treinta y ocho grados. Diagnóstico, faringoamigdalitis aguda, probable origen bacteriano. Indico amoxicilina quinientos miligramos cada ocho horas por siete días y paracetamol quinientos miligramos cada seis horas si hay dolor o fiebre.",
+		"gold": {
+			"paciente": {
+				"nombre": "Sofía Delgado",
+				"cedula": null,
+				"edad": "30 años",
+				"sexo": "Femenino"
+			},
+			"motivo_consulta": "Dolor de garganta y fiebre de dos días de evolución",
+			"enfermedad_actual": "Odinofagia y fiebre desde hace dos días",
+			"antecedentes": null,
+			"alergias": "Ninguna conocida",
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": 38,
+				"saturacion_oxigeno": null,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Faringe eritematosa con placas blanquecinas, ganglios cervicales dolorosos",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Faringoamigdalitis aguda de probable origen bacteriano",
+					"cie10_sugerido": "J03.9",
+					"evidencia": "faringoamigdalitis aguda, probable origen bacteriano"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Amoxicilina",
+					"dosis": "500 mg",
+					"via": "Oral",
+					"frecuencia": "Cada 8 horas",
+					"duracion": "7 días",
+					"evidencia": "amoxicilina quinientos miligramos cada ocho horas por siete días"
+				},
+				{
+					"medicamento": "Paracetamol",
+					"dosis": "500 mg",
+					"via": "Oral",
+					"frecuencia": "Cada 6 horas si hay dolor o fiebre",
+					"duracion": null,
+					"evidencia": "paracetamol quinientos miligramos cada seis horas si hay dolor o fiebre"
+				}
+			],
+			"examenes_solicitados": null,
+			"referencia": null,
+			"indicaciones": null
+		}
+	},
+	{
+		"id": "c9",
+		"transcript": "Paciente Elena Vargas, de cincuenta y cinco años. Viene porque desde hace un mes tiene picazón y enrojecimiento en la piel del antebrazo derecho, que empeora con el calor. No ha usado ningún tratamiento. Al examen, placa eritematosa descamativa bien delimitada en el antebrazo derecho, sin secreción. Diagnóstico, probable dermatitis, sugiero dermatitis de contacto. Indico crema de hidrocortisona uno por ciento dos veces al día por dos semanas y evitar el contacto con posibles irritantes. Si no mejora, la refiero a dermatología.",
+		"gold": {
+			"paciente": {
+				"nombre": "Elena Vargas",
+				"cedula": null,
+				"edad": "55 años",
+				"sexo": "Femenino"
+			},
+			"motivo_consulta": "Picazón y enrojecimiento en el antebrazo derecho de un mes de evolución",
+			"enfermedad_actual": "Prurito y eritema en el antebrazo derecho que empeora con el calor, sin tratamiento previo",
+			"antecedentes": null,
+			"alergias": null,
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Placa eritematosa descamativa bien delimitada en el antebrazo derecho, sin secreción",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Dermatitis de contacto",
+					"cie10_sugerido": "L23.9",
+					"evidencia": "probable dermatitis, sugiero dermatitis de contacto"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Hidrocortisona crema 1%",
+					"dosis": null,
+					"via": "Tópica",
+					"frecuencia": "Dos veces al día",
+					"duracion": "2 semanas",
+					"evidencia": "crema de hidrocortisona uno por ciento dos veces al día por dos semanas"
+				}
+			],
+			"examenes_solicitados": null,
+			"referencia": "Dermatología si no mejora",
+			"indicaciones": "Evitar contacto con posibles irritantes"
+		}
+	},
+	{
+		"id": "c10",
+		"transcript": "Paciente Ricardo Solís, de sesenta años. Tiene dolor de estómago y acidez desde hace tres días. Dice que su esposa le ha estado dando un té de manzanilla con bicarbonato, pero no le ha ayudado mucho. No toma otros medicamentos. Al examen, dolor leve en epigastrio, sin defensa ni signos de alarma. Diagnóstico, dispepsia funcional. Indico omeprazol veinte miligramos una vez al día en ayunas por dos semanas y evitar comidas irritantes y café.",
+		"gold": {
+			"paciente": {
+				"nombre": "Ricardo Solís",
+				"cedula": null,
+				"edad": "60 años",
+				"sexo": "Masculino"
+			},
+			"motivo_consulta": "Dolor de estómago y acidez de tres días de evolución",
+			"enfermedad_actual": "Dolor epigástrico y acidez desde hace tres días, sin mejoría con té de manzanilla y bicarbonato casero",
+			"antecedentes": null,
+			"alergias": null,
+			"medicamentos_actuales": null,
+			"signos_vitales": {
+				"presion_arterial": null,
+				"frecuencia_cardiaca": null,
+				"frecuencia_respiratoria": null,
+				"temperatura": null,
+				"saturacion_oxigeno": null,
+				"peso_kg": null,
+				"talla_cm": null
+			},
+			"examen_fisico": "Dolor leve en epigastrio, sin defensa ni signos de alarma",
+			"resultados": null,
+			"diagnosticos": [
+				{
+					"descripcion": "Dispepsia funcional",
+					"cie10_sugerido": "K30",
+					"evidencia": "dispepsia funcional"
+				}
+			],
+			"tratamiento": [
+				{
+					"medicamento": "Omeprazol",
+					"dosis": "20 mg",
+					"via": "Oral",
+					"frecuencia": "Una vez al día en ayunas",
+					"duracion": "2 semanas",
+					"evidencia": "omeprazol veinte miligramos una vez al día en ayunas por dos semanas"
+				}
+			],
+			"examenes_solicitados": null,
+			"referencia": null,
+			"indicaciones": "Evitar comidas irritantes y café"
+		}
+	}
+]
