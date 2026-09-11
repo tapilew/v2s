@@ -1,0 +1,88 @@
+{
+	"feedbackId": "FB-001",
+	"status": "fixed-on-tested-device",
+	"verifiedDate": "2026-09-10",
+	"timezone": "America/Panama",
+	"artifact": {
+		"release": "build-4",
+		"sourceCommit": "d0251c2a4c9777346bdfe44679db0c3e37a0f8e6",
+		"sha256": "55d4a51351acca2779f6206cc419eda51ea125de018aa61ff058b91092e057b7",
+		"githubActionsRun": 34560690984,
+		"installedDigestVerified": true,
+		"installation": "update-without-clearing-data-or-changing-permissions"
+	},
+	"device": {
+		"model": "Google Pixel 9 Pro",
+		"androidVersion": "17",
+		"apiLevel": 37,
+		"abi": "arm64-v8a"
+	},
+	"coldStarts": [
+		{
+			"check": "persistent-startup-probe",
+			"requiredSeconds": 30,
+			"observations": 30,
+			"processPresentAtEveryObservation": true,
+			"foregroundAtEnd": true,
+			"verdict": "PASS"
+		},
+		{
+			"check": "persistent-startup-probe",
+			"requiredSeconds": 8,
+			"observations": 8,
+			"processPresentAtEveryObservation": true,
+			"foregroundAtEnd": true,
+			"verdict": "PASS"
+		},
+		{
+			"check": "persistent-startup-probe",
+			"requiredSeconds": 8,
+			"observations": 8,
+			"processPresentAtEveryObservation": true,
+			"foregroundAtEnd": true,
+			"verdict": "PASS"
+		},
+		{
+			"check": "original-reproduction-command",
+			"requiredSeconds": 8,
+			"observations": 8,
+			"processPresentAtEveryObservation": true,
+			"foregroundAtEnd": true,
+			"verdict": "PASS"
+		}
+	],
+	"backgroundResume": {
+		"sameProcess": true,
+		"observationsAfterResume": 8,
+		"foregroundAtEnd": true,
+		"crashSignaturesAbsent": true,
+		"verdict": "PASS"
+	},
+	"nativeEvidence": {
+		"nativehelperLoadedSuccessfullyInEveryColdStart": true,
+		"missingNativehelperErrorAbsent": true,
+		"missingPlatformConstantsErrorAbsent": true,
+		"fatalSignalsAndExceptionsAbsent": true
+	},
+	"uiEvidence": {
+		"emptyLibraryVisible": true,
+		"qwenDownloadProgressObserved": true,
+		"financeModelsReadyReportedByUser": true
+	},
+	"localChecks": {
+		"existingUnitTestsPassed": 41,
+		"typeScriptPassed": true,
+		"appAndPluginBiomePassed": true,
+		"expoPrebuildRunsWithIdenticalBootstrap": 2,
+		"dependencyManifestsUnchanged": true,
+		"regressionProbeFailedOnOriginalApkBeforeCandidateTest": true
+	},
+	"notYetValidated": [
+		"voice transcription",
+		"financial row generation",
+		"append, edit and persistence",
+		"CSV export round-trip",
+		"Salud model initialization and inference",
+		"airplane-mode inference"
+	]
+}

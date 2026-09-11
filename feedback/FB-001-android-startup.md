@@ -1,26 +1,28 @@
-# FB-001 · P0: build 1 se cierra al abrir en Pixel 9 Pro
+# FB-001 · Corregido: cierre al abrir build 1 en Pixel 9 Pro
 
-- **Estado:** reproducido 2 de 2 veces en build 1. Candidato de corrección implementado; pendiente de validar en un APK nuevo.
-- **Fecha:** 10 sep 2026, 22:24, Panamá (UTC−5).
-- **Área propuesta:** arranque nativo de Android, integración Bare Kit / SoLoader.
-- **Impacto:** bloquea la demo en el teléfono probado. No demuestra que fallen todos los Android.
+- **Estado:** corregido y validado físicamente en build 4, en el teléfono probado.
+- **Severidad original:** P0, bloqueaba la demo.
+- **Reproducción original:** 10 sep 2026, 22:24, Panamá (UTC−5), 2 de 2 intentos fallidos.
+- **Validación:** 10 sep 2026, 23:13–23:21, Panamá: cuatro arranques y segundo plano/reanudación aprobados.
+- **Área:** arranque nativo de Android, integración Bare Kit / SoLoader.
+- **Alcance:** este cierre está resuelto en el Pixel 9 Pro probado. La extracción y el flujo sin conexión siguen pendientes de validar.
 
 ## Resumen para actuar
 
-El APK se instala, pero el proceso termina al abrirlo, antes de poder usar la biblioteca. El primer fallo relevante es de carga nativa, no de la extracción de datos:
+En build 1, el APK se instalaba, pero el proceso terminaba al abrirlo, antes de poder usar la biblioteca. El primer fallo relevante era de carga nativa, no de la extracción de datos:
 
 ```text
 libappmodules.so → libbare-kit.so → libnativehelper.so
                                       ↑ SoLoader no la encuentra
 ```
 
-Después aparece `PlatformConstants could not be found` y el proceso termina con `SIGABRT`.
+Después aparecía `PlatformConstants could not be found` y el proceso terminaba con `SIGABRT`.
 
 **Dato importante:** `libnativehelper.so` sí existe en este teléfono, dentro del APEX de ART, y figura en la lista de bibliotecas públicas del sistema. No basta con decir «falta una biblioteca en el APK». La investigación debe empezar por cómo SoLoader resuelve esa dependencia del sistema.
 
-**Siguiente entrega útil:** un APK nuevo, identificado por commit, con un cambio acotado en la carga nativa y sometido al mismo arranque en este teléfono. No empezar modificando los prompts, las hojas o los modelos.
+**Resultado:** build 4 carga esa biblioteca mediante el cargador del sistema y supera la reproducción original. No se modificaron los prompts, las hojas ni los modelos. La evidencia del antes y después está en este informe.
 
-## Artefacto y entorno exactos
+## Artefacto y entorno de la reproducción original
 
 | Dato | Valor |
 | --- | --- |
@@ -91,7 +93,7 @@ Las fuentes de búsqueda que muestra SoLoader en el error incluyen las bibliotec
 
 ## Qué sabemos y qué falta demostrar
 
-**Confirmado**
+**Confirmado en la reproducción original**
 
 - El teléfono está autorizado y ejecuta ARM64. La instalación del APK terminó correctamente.
 - El cierre se reproduce sin interacción con las funciones del producto.
@@ -99,18 +101,18 @@ Las fuentes de búsqueda que muestra SoLoader en el error incluyen las bibliotec
 - SoLoader no consigue resolverla durante el arranque, aunque la biblioteca existe como biblioteca pública del sistema.
 - `libappmodules.so` contiene símbolos de registro, entre ellos `JNI_OnLoad`, `cxxModuleProvider` y `javaModuleProvider`. No es correcto asumir que esos símbolos faltan del APK.
 
-**Hipótesis principal, todavía sin prueba de corrección**
+**Causa validada por la corrección**
 
-La resolución de bibliotecas de SoLoader no alcanza esta dependencia pública alojada en APEX. Eso impide completar la carga de `libappmodules.so` y deja incompleto el registro de módulos de React Native. Explica el orden de los errores, pero falta demostrarlo con un APK corregido.
+Las fuentes de directorio de SoLoader no resolvían la dependencia pública de Bare Kit alojada en APEX. El cambio añade una fuente específica para delegar esa biblioteca al cargador del sistema antes del arranque de React Native. En los cuatro arranques del APK corregido, el log confirma `Load libnativehelper.so ...: ok`, se ejecuta `main` y no reaparecen los errores de módulo faltante ni el `SIGABRT`.
 
 **No demostrado**
 
 - Que exista un desajuste de versiones JS/nativo o que R8 sea la causa.
 - Que añadir una copia de `libnativehelper.so` al APK sea la solución correcta.
 - Que el problema afecte a otras versiones de Android o a todos los teléfonos.
-- Que resolver este cierre baste para que QVAC cargue modelos o complete inferencias.
+- Que resolver este cierre baste para completar inferencias y el flujo sin conexión en ambos modos.
 
-## Investigación recomendada para quien genera el APK
+## Investigación inicial, antes de implementar el cambio
 
 1. Confirmar la versión de SoLoader **resuelta por Gradle**. React Native `0.86.3` declara `0.12.1`, pero aún no se comprobó la resolución final del APK.
 2. Probar una estrategia compatible con esa versión que permita delegar la resolución de bibliotecas públicas de APEX al cargador del sistema. Mantener la inicialización y el mapeo de bibliotecas fusionadas que requiere React Native.
@@ -127,7 +129,7 @@ Fuentes primarias consultadas:
 - [SoLoader 0.12.1: inicialización y fuentes de carga](https://github.com/facebook/SoLoader/blob/v0.12.1/java/com/facebook/soloader/SoLoader.java).
 - [SoLoader 0.12.1: delegación al cargador del sistema](https://github.com/facebook/SoLoader/blob/v0.12.1/java/com/facebook/soloader/SystemLoadWrapperSoSource.java).
 
-## Candidato de corrección
+## Corrección implementada
 
 `plugins/with-nativehelper-loader.js`, registrado en `app.json`, instala una fuente de SoLoader que delega **solo** `libnativehelper.so` al cargador del sistema. Se inicializa con `OpenSourceMergedSoMapping` antes del arranque de React Native. Las demás bibliotecas siguen por las fuentes existentes. No se cambiaron dependencias, modelos, prompts ni comportamiento de las hojas.
 
@@ -145,22 +147,38 @@ Sondeo para el APK nuevo:
 ADB=/ruta/a/adb ANDROID_SERIAL=<telefono> python3 scripts/smoke-android-startup.py
 ```
 
-**Pendiente:** compilación del APK candidato y validación física. Estos checks locales no demuestran que el cierre esté corregido.
+## Validación física de la corrección
 
-## Criterios para cerrar este bloqueo
+| Dato | Resultado |
+| --- | --- |
+| APK probado | [`build-4`](https://github.com/tapilew/v2s/releases/tag/build-4) |
+| Commit | `d0251c2a4c9777346bdfe44679db0c3e37a0f8e6` |
+| SHA-256 | `55d4a51351acca2779f6206cc419eda51ea125de018aa61ff058b91092e057b7` |
+| Build | [GitHub Actions, ejecución 34560690984](https://github.com/tapilew/v2s/actions/runs/34560690984), aprobada |
+| Instalación | Actualización con datos y permisos conservados; digest del APK instalado comprobado |
+| Arranque 1 | Aprobado: 30 observaciones de un segundo, proceso vivo y app en primer plano |
+| Arranques 2 y 3 | Aprobados: ocho observaciones de un segundo en cada intento |
+| Reproducción original | Reejecutada sin cambiar su criterio: aprobada, ocho observaciones; cuarto arranque independiente |
+| Segundo plano/reanudación | Aprobado; mismo proceso vivo y app en primer plano tras volver |
+| Interfaz | Biblioteca vacía visible; progreso de descarga de Qwen3 observado |
+| Errores originales | Ausentes en los cuatro arranques; resolución de `libnativehelper.so` confirmada en todos |
 
-- [ ] Registrar release, commit y SHA-256 del APK candidato.
-- [ ] Instalarlo sin perder datos existentes; si cambia la firma y requiere desinstalar, pedir autorización antes.
-- [ ] Superar tres arranques desde proceso detenido en este Pixel 9 Pro: proceso vivo y V2S en primer plano tras ocho segundos.
-- [ ] Mostrar la biblioteca inicial o una carga de modelos manejada por la interfaz y mantenerse abierta al menos treinta segundos.
-- [ ] No repetir el fallo de carga de `libnativehelper.so`, el error de `PlatformConstants` ni el `SIGABRT` en los logs de esos intentos.
-- [ ] Volver del segundo plano sin cierre inesperado.
+Resumen verificable, sin identificadores personales del teléfono: [`evidence/FB-001-startup-fixed.json`](evidence/FB-001-startup-fixed.json).
 
-Una compilación verde o una prueba en Expo Go no cumplen estos criterios.
+## Criterios de cierre cumplidos
+
+- [x] Registrar release, commit y SHA-256 del APK candidato.
+- [x] Instalarlo sin perder datos existentes ni cambiar permisos.
+- [x] Superar al menos tres arranques desde proceso detenido en el Pixel 9 Pro probado.
+- [x] Mostrar la biblioteca inicial/carga de modelos y mantenerse abierta al menos treinta segundos.
+- [x] No repetir los fallos de `libnativehelper.so`, `PlatformConstants` ni `SIGABRT`.
+- [x] Volver del segundo plano sin cierre inesperado.
+
+Estos resultados provienen del APK instalado en el teléfono, no solo de una compilación verde o de Expo Go.
 
 ## Pruebas de producto pendientes después del arranque
 
-Estas pruebas están **bloqueadas o no ejecutadas**, no aprobadas ni reportadas como defectos:
+El cierre ya no bloquea estas pruebas. Se observó progreso de descarga en Finanzas y el usuario confirmó que sus modelos estaban listos; eso no equivale a validar la inferencia. El resto sigue **sin validación completa**, no aprobado ni reportado como defecto:
 
 | Prueba | Qué hay que observar |
 | --- | --- |
