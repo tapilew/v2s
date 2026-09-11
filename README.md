@@ -2,7 +2,7 @@
 
 # V2S (voice-to-spreadsheet)
 
-Habla o escribe, y el teléfono lo convierte en una hoja de cálculo. Cada grabación o texto crea una hoja nueva con sus propias columnas, o agrega filas a una hoja que ya guardaste. Las hojas viven en la app y se exportan a Excel Google Sheets con un click. Toda la IA corre en el teléfono con el SDK de QVAC. Totalmente confidencial.
+Habla o escribe, y el teléfono lo convierte en una hoja de cálculo. Cada grabación o texto crea una hoja nueva con sus propias columnas, o agrega filas a una hoja que ya guardaste. Las hojas viven en la app y se exportan a Excel o Google Sheets con un click. Toda la IA corre en el teléfono con el SDK de QVAC. Totalmente confidencial.
 
 Los casos de uso son **Finanzas** y **Salud**. Sirve como asesor de ahorro, para el registro de equipos médicos de un hospital o para cualquier otra cosa que quieras convertir en filas.
 
