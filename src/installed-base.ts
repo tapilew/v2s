@@ -231,12 +231,14 @@ export const parseExtraction = (response: string): Extraction | null => {
 	const start = response.indexOf("{");
 	const end = response.lastIndexOf("}");
 	if (start === -1 || end < start) return null;
-	let raw: unknown;
 	try {
-		raw = JSON.parse(response.slice(start, end + 1));
+		return extractionFrom(JSON.parse(response.slice(start, end + 1)));
 	} catch {
 		return null;
 	}
+};
+
+export const extractionFrom = (raw: unknown): Extraction | null => {
 	if (!isRecord(raw)) return null;
 	const equipos = Array.isArray(raw.equipos)
 		? raw.equipos
