@@ -17,7 +17,7 @@
 				"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
 			],
 			"adaptiveIcon": {
-				"backgroundColor": "#E6F4FE",
+				"backgroundColor": "#B8F56F",
 				"foregroundImage": "./assets/android-icon-foreground.png",
 				"backgroundImage": "./assets/android-icon-background.png",
 				"monochromeImage": "./assets/android-icon-monochrome.png"
