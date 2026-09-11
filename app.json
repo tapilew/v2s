@@ -38,6 +38,7 @@
 					}
 				}
 			],
+			"./plugins/with-optional-opencl.js",
 			"@qvac/sdk/expo-plugin",
 			"expo-audio",
 			"expo-sharing",
